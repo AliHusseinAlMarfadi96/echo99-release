@@ -1,0 +1,89 @@
+rules_version = '2';
+
+// Echo99 Firestore rules.
+// Default-deny is intentional: newly added collections must receive explicit
+// rules instead of silently becoming readable/writable by every signed-in user.
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    match /app_config/{doc} {
+      // The app reads public update metadata. Configure this document from
+      // the Firebase console or trusted admin tooling, not from app clients.
+      allow read: if true;
+    allow create, update: if signedIn() && request.resource.data.force_update_required == true;
+    }
+
+    match /presence/{uid} {
+      // Signed-in players can see who is online, but can only publish their
+      // own presence record.
+      allow read: if signedIn();
+      allow create, update: if signedIn() && request.auth.uid == uid;
+      allow delete: if signedIn() && request.auth.uid == uid;
+    }
+
+    match /users/{uid} {
+      // User profile root documents are not used as a public data store.
+      allow read, write: if false;
+
+      match /friends/{friendUid} {
+        allow read: if signedIn() && request.auth.uid == uid;
+        // Both sides maintain their own copy of a friendship on acceptance.
+        allow create, update, delete: if signedIn()
+          && (request.auth.uid == uid || request.auth.uid == friendUid);
+      }
+
+      match /friendRequests/{fromUid} {
+        allow read: if signedIn() && request.auth.uid == uid;
+        allow create: if signedIn()
+          && request.auth.uid == fromUid
+          && request.resource.data.fromUid == request.auth.uid;
+        allow delete: if signedIn() && request.auth.uid == uid;
+        allow update: if false;
+      }
+
+      match /privateMessages/{messageId} {
+        // Messages are stored under the recipient's UID.
+        allow read: if signedIn() && request.auth.uid == uid;
+        allow create: if signedIn()
+          && request.resource.data.fromUid == request.auth.uid;
+        allow update, delete: if false;
+      }
+    }
+
+    match /invites/{inviteId} {
+      allow read: if signedIn()
+        && (resource.data.toUid == request.auth.uid
+          || resource.data.fromUid == request.auth.uid);
+      allow create: if signedIn()
+        && request.resource.data.fromUid == request.auth.uid;
+    allow update: if signedIn() && resource.data.fromUid == request.auth.uid && request.resource.data.fromUid == request.auth.uid;
+      allow delete: if signedIn()
+        && (resource.data.toUid == request.auth.uid
+          || resource.data.fromUid == request.auth.uid);
+    }
+
+    match /latency/{uid} {
+      allow read, write: if signedIn() && request.auth.uid == uid;
+    }
+
+    match /tables/{tableId} {
+      // The table list and live game state are visible to signed-in users.
+      // Creation must identify the authenticated host.
+      allow read: if signedIn();
+      allow create: if signedIn()
+        && request.resource.data.hostId == request.auth.uid;
+      // The current multiplayer engine writes state from participating
+      // clients. Tightening updates to table members requires a coordinated
+      // membership/schema change; do not apply a host-only rule here because
+      // it would break joining and turns for non-host players.
+      allow update, delete: if signedIn();
+
+      match /log/{logId} {
+        allow read, write: if signedIn();
+      }
+    }
+  }
+}

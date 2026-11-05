@@ -1,0 +1,2 @@
+# Ludo from BlindGamers (Arabic source)
+See fetched content. Key: 2-4 players, 4 pieces, need 6 to exit, triple 6 ends turn, safe squares 0,8,13,21,26,34,39,47, free mode vs normal, teams, fast ludo (2 pieces win), mandatory kill option, capture opposite colors in normal / all in free. Home exact. Turn order red blue green yellow in free. Bases: free red0 blue13 green26 yellow39; normal red+green from 0, others from 26.

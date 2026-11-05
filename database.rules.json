@@ -1,0 +1,33 @@
+{
+  "rules": {
+    ".read": false,
+    ".write": false,
+    "status": {
+      ".read": "auth != null",
+      "$uid": {
+        ".read": "auth != null",
+        ".write": "auth != null && auth.uid == $uid"
+      }
+    },
+    "hosting": {
+      "$uid": {
+        ".read": "auth != null",
+        ".write": "auth != null && auth.uid == $uid"
+      }
+    },
+    "tables": {
+      "$tableId": {
+        ".read": "auth != null",
+        ".write": "auth != null && !newData.exists()",
+        "host": {
+          ".write": "auth != null && (!newData.exists() || newData.val() === auth.uid)"
+        },
+        "seats": {
+          "$uid": {
+            ".write": "auth != null && auth.uid == $uid"
+          }
+        }
+      }
+    }
+  }
+}

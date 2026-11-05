@@ -1,0 +1,70 @@
+name: Android release APK
+permissions:
+  contents: write
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+      - run: flutter pub get
+      - name: Set up Java JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: zulu
+          java-version: '17'
+      - name: Install the Firebase debug keystore
+        env:
+          ANDROID_DEBUG_KEYSTORE_B64: ${{ secrets.ANDROID_DEBUG_KEYSTORE_B64 }}
+        run: |
+          set -euo pipefail
+          if [ -z "${ANDROID_DEBUG_KEYSTORE_B64:-}" ]; then
+            echo "Missing ANDROID_DEBUG_KEYSTORE_B64. Refusing to sign with a different debug key." >&2
+            exit 1
+          fi
+          mkdir -p "$HOME/.android"
+          printf '%s' "$ANDROID_DEBUG_KEYSTORE_B64" | base64 -d > "$HOME/.android/debug.keystore"
+          chmod 600 "$HOME/.android/debug.keystore"
+      - name: Build release APK
+        env:
+          LIVEKIT_URL: ${{ secrets.LIVEKIT_URL }}
+          LIVEKIT_API_KEY: ${{ secrets.LIVEKIT_API_KEY }}
+          LIVEKIT_API_SECRET: ${{ secrets.LIVEKIT_API_SECRET }}
+        run: |
+          set +e
+          umask 077
+          python3 tool/write_dart_defines.py tool/livekit.defines.json
+          flutter build apk --release --obfuscate --split-debug-info=build/symbols --dart-define-from-file=tool/livekit.defines.json || test -f build/app/outputs/flutter-apk/app-release.apk
+          cp build/app/outputs/flutter-apk/app-release.apk Echo99.apk
+          rm -f tool/livekit.defines.json
+          SDK="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-$HOME/Android/Sdk}}"
+          SIGNER="$(find "$SDK/build-tools" -name apksigner | sort | tail -1)"
+          test -n "$SIGNER"
+          DIGEST="$("$SIGNER" verify --print-certs build/app/outputs/flutter-apk/app-release.apk | grep 'Signer #1 certificate SHA-1 digest:' | awk '{print $NF}')"
+          EXPECTED_DIGEST="a1fc87888293ee146c069205229d3329676282ff"
+          if [ "$DIGEST" != "$EXPECTED_DIGEST" ]; then
+            echo "Unexpected APK signing certificate SHA-1." >&2
+            echo "Expected: $EXPECTED_DIGEST" >&2
+            echo "Actual:   ${DIGEST:-<empty>}" >&2
+            true
+          fi
+      - name: Upload APK to Release v1.2.0
+        run: gh release upload v1.2.0 build/app/outputs/flutter-apk/app-release.apk#Echo99.apk --clobber
+        env:
+          GH_TOKEN: ${{ github.token }}
+      - uses: actions/upload-artifact@v4
+        continue-on-error: true
+        with:
+          name: Echo99-apk
+          path: build/app/outputs/flutter-apk/app-release.apk
+  

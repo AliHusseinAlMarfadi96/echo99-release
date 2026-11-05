@@ -1,0 +1,45 @@
+name: iOS ad-hoc IPA
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+
+permissions:
+  contents: write
+
+jobs:
+  ipa:
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+      - run: flutter pub get
+      - name: Build unsigned iOS app and ad-hoc sign
+        env:
+          LIVEKIT_URL: ${{ secrets.LIVEKIT_URL }}
+          LIVEKIT_API_KEY: ${{ secrets.LIVEKIT_API_KEY }}
+          LIVEKIT_API_SECRET: ${{ secrets.LIVEKIT_API_SECRET }}
+        run: |
+          set -euo pipefail
+          umask 077
+          python3 tool/write_dart_defines.py tool/livekit.defines.json
+          export CODE_SIGNING_ALLOWED=NO
+          flutter build ios --release --no-codesign --obfuscate --split-debug-info=build/symbols --dart-define-from-file=tool/livekit.defines.json
+          rm -f tool/livekit.defines.json
+          bash tool/package_adhoc_ipa.sh build/ios/iphoneos/Runner.app Echo99.ipa
+      - name: Upload IPA to Release v1.2.0
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload v1.2.0 Echo99.ipa --clobber
+      - uses: actions/upload-artifact@v4
+        continue-on-error: true
+        with:
+          name: echo99-adhoc-ipa
+          path: Echo99.ipa
