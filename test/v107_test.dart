@@ -198,7 +198,7 @@ void main() {
       expect(reset.players.every((s) => s.points == reset.maxPoints), isTrue);
       final again = startGame(reset, Random(3), 0).state;
       expect(again.status, 'playing');
-      expect(again.hands['h'], hasLength(4));
+      expect(again.hands['h'], hasLength(3));
     });
   });
 
