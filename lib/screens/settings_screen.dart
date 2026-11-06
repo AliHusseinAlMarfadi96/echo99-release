@@ -49,7 +49,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             },
           ),
           const SizedBox(height: 12),
-          const Text('نسخة اختبار 1.3.3 (17)'),
+          const Text('نسخة اختبار 1.3.3 (18)'),
           OutlinedButton(
             onPressed: () async {
               await EchoScope.of(context).sounds.play('connected');
