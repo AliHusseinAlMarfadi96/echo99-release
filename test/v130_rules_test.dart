@@ -329,39 +329,32 @@ void main() {
   });
 
   group('Jackaroo 6', () {
-    test('a 6 lists every base piece and lets the player play again', () {
+    test('a 6 is a plain 6-step walk: no exit, no replay (rules PDF)', () {
       const h = jackarooHome;
       final s = _jackaroo(a: [h, h, 20, h], handA: ['S6', 'H9']);
       final moves = jackarooMovesForCard(s, 'A', 'S6');
-      final exits = moves.where((m) => m.kind == 'exit').toList();
-      expect(exits.map((m) => m.piece).toSet(), {0, 1, 3});
+      expect(moves.where((m) => m.kind == 'exit'), isEmpty);
+      final walk = moves.singleWhere(
+        (m) => m.kind == 'forward' && m.piece == 2 && m.steps == 6,
+      );
       final r = playJackaroo(
         s,
         playerId: 'A',
-        move: exits.first,
+        move: walk,
         random: Random(1),
         nowMillis: 1,
       );
       expect(r.error, isNull);
-      expect(r.state.current!.id, 'A', reason: 'play another card now');
-      expect(jackarooSixChain(r.state), 1);
-      expect(r.state.cue!.also, contains('jk_marble_enter'));
+      expect(r.state.current!.id, 'B', reason: 'turn passes after a 6');
+      expect(jackarooSixChain(r.state), 0);
     });
 
-    test('the third consecutive 6 forfeits the turn', () {
+    test('a 6 never forfeits the turn, even after earlier sixes', () {
       const h = jackarooHome;
       final s = _jackaroo(a: [h, h, 20, h], handA: ['S6', 'H9'], sixChain: 2);
       final moves = jackarooMovesForCard(s, 'A', 'S6');
-      expect(moves.single.kind, 'sixForfeit');
-      final r = playJackaroo(
-        s,
-        playerId: 'A',
-        move: moves.single,
-        random: Random(1),
-        nowMillis: 1,
-      );
-      expect(r.state.current!.id, 'B');
-      expect(jackarooSixChain(r.state), 0);
+      expect(moves.where((m) => m.kind == 'sixForfeit'), isEmpty);
+      expect(moves.where((m) => m.kind == 'forward'), isNotEmpty);
     });
 
     test('forward steps pulse per square, team colors alternate clips', () {
