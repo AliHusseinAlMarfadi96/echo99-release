@@ -22,6 +22,7 @@ import 'services/settings_model.dart';
 import 'services/social_cues.dart';
 import 'services/social_repository.dart';
 import 'services/sounds.dart';
+import 'services/startup_audio.dart';
 import 'services/speech.dart';
 import 'services/table_repository.dart';
 import 'services/voice_room.dart';
@@ -64,6 +65,10 @@ class Echo99App extends StatefulWidget {
 
 class _Echo99AppState extends State<Echo99App> with WidgetsBindingObserver {
   final _sounds = SoundBoard();
+  late final _startupAudio = StartupAudio(
+    start: () => _sounds.loop('ambient', repeat: false),
+    stop: _sounds.stopLoop,
+  );
   final _speech = Speech();
   final _voice = VoiceRoom();
   final _voiceTokens = VoiceTokenTransport.configured();
@@ -87,6 +92,9 @@ class _Echo99AppState extends State<Echo99App> with WidgetsBindingObserver {
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) unawaited(_startupAudio.startOnce());
+    });
     _voice.serverTokenCall = _voiceTokens.mint;
     _account = AccountController(
       widget.settings,
@@ -127,7 +135,10 @@ class _Echo99AppState extends State<Echo99App> with WidgetsBindingObserver {
     if (!_account.signedIn) {
       _offline = false;
       _linking = false;
-      _sounds.stopLoop();
+      // Initial login keeps the one startup clip. A real sign-out ends it.
+      if (_gate == _Gate.menu || _gate == _Gate.connecting) {
+        unawaited(_startupAudio.finish());
+      }
       _voice.close();
       unawaited(_presence.goOffline());
     }
@@ -153,7 +164,7 @@ class _Echo99AppState extends State<Echo99App> with WidgetsBindingObserver {
     if (_account.guest) {
       _offline = true;
       _linking = false;
-      unawaited(_sounds.stopLoop());
+      // Offline guests hear the same one-shot launch clip, not a server chime.
       if (_gate != _Gate.menu) {
         _gate = _Gate.menu;
       }
@@ -173,22 +184,23 @@ class _Echo99AppState extends State<Echo99App> with WidgetsBindingObserver {
       return;
     }
     _linking = true;
-    // Non-guest always hears the ~30s connecting loop + success chime.
-    // Guests stay silent (they never enter this gate).
+    // Reuse the startup clip at sign-in, never play it twice in parallel.
+    // Guests hear startup but never enter the online connection gate.
     final audible = !_account.guest;
     if (mounted) {
       setState(() => _gate = _Gate.connecting);
     }
     if (audible) {
-      await _sounds.loop('ambient');
+      await _startupAudio.connecting();
     }
     var ok = false;
     try {
+      await Future<void>.delayed(const Duration(milliseconds: 2200));
       ok = await _reachServers().timeout(const Duration(seconds: 30));
     } catch (_) {
       ok = false;
     }
-    await _sounds.stopLoop();
+    await _startupAudio.finish();
     _linking = false;
     if (!mounted || !_account.signedIn || _account.guest || _update.required) {
       return;
@@ -269,7 +281,7 @@ class _Echo99AppState extends State<Echo99App> with WidgetsBindingObserver {
   }
 
   Future<void> _chooseOffline() async {
-    await _sounds.stopLoop();
+    await _startupAudio.finish();
     await _voice.close();
     if (!mounted) {
       return;
@@ -285,6 +297,11 @@ class _Echo99AppState extends State<Echo99App> with WidgetsBindingObserver {
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.paused ||
+        state == AppLifecycleState.hidden ||
+        state == AppLifecycleState.detached) {
+      unawaited(_startupAudio.finish());
+    }
     if (state == AppLifecycleState.resumed) {
       unawaited(_onResume());
       return;
@@ -392,6 +409,7 @@ class _Echo99AppState extends State<Echo99App> with WidgetsBindingObserver {
     WidgetsBinding.instance.removeObserver(this);
     _account.removeListener(_onAccount);
     _markOnline(false);
+    unawaited(_startupAudio.close());
     _sounds.dispose();
     _voice.close();
     unawaited(_presence.goOffline());
