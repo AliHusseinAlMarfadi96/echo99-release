@@ -2,6 +2,12 @@ name: iOS ad-hoc IPA
 
 on:
   workflow_dispatch:
+    inputs:
+      publish_verified_build18:
+        description: Publish exact verified build18 artifact only (no rebuild)
+        type: boolean
+        required: false
+        default: false
   push:
     branches: [ main ]
 
@@ -10,6 +16,7 @@ permissions:
 
 jobs:
   ipa:
+    if: ${{ inputs.publish_verified_build18 != true }}
     runs-on: macos-latest
     timeout-minutes: 30
     steps:
@@ -56,3 +63,79 @@ jobs:
         with:
           name: echo99-adhoc-ipa
           path: Echo99.ipa
+
+  publish-verified-build18:
+    if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/repair/build-fix-1.3.2' && inputs.publish_verified_build18 == true }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      actions: read
+      contents: write
+    concurrency:
+      group: publish-verified-test18
+      cancel-in-progress: false
+    steps:
+      - name: Verify and publish existing build18 artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          umask 077
+          python3 - <<'PY'
+          import hashlib,json,subprocess,zipfile,io,plistlib,urllib.parse
+          REPO='AliHusseinAlMarfadi96/echo99-release'
+          BASE='repos/'+REPO
+          SHA='a21a3df91d1cf1291d383b08f99dc8b9166e6210'
+          RUN=42297023506
+          ART=13541948731
+          RID=437091336
+          TAG='v1.3.3-test.18'
+          NAME='Echo99-1.3.3-build18-a21a3df.ipa'
+          HASH='3ae1199edc9a9d963e8e488b18a222cd3e9327769df1c362798de981dcb8671e'
+          def api(path):
+           return json.loads(subprocess.check_output(['gh','api',BASE+'/'+path]))
+          def digest(b): return hashlib.sha256(b).hexdigest()
+          def assert_ok(ok,label):
+           if not ok: raise RuntimeError('Verification failed: '+label)
+          def fingerprint(r):
+           return {k:r.get(k) for k in ['id','tag_name','target_commitish','draft','prerelease','body','published_at','assets']}
+          old={i:fingerprint(api('releases/'+str(i))) for i in [437021308,435898907]}
+          assert_ok(api('releases/latest')['id']==435898907,'stable latest before')
+          r=api('actions/runs/'+str(RUN))
+          assert_ok(r['head_sha']==SHA and r['conclusion']=='success' and r['status']=='completed' and r['head_branch']=='repair/build-fix-1.3.2' and r['event']=='workflow_dispatch' and r['path']=='.github/workflows/ios-adhoc-ipa.yml','successful source run')
+          a=api('actions/artifacts/'+str(ART))
+          assert_ok(a['id']==ART and a['name']=='echo99-adhoc-ipa' and not a['expired'] and a['workflow_run']['id']==RUN and a['workflow_run']['head_sha']==SHA,'artifact identity')
+          z=subprocess.check_output(['gh','api',BASE+'/actions/artifacts/'+str(ART)+'/zip'])
+          assert_ok(digest(z)=='af665e2bd805dfed31c9bdbf1bfcae2e317d81c2c9e2301909a73e3db85c5413','artifact archive hash')
+          with zipfile.ZipFile(io.BytesIO(z)) as archive:
+           files=[x for x in archive.namelist() if not x.endswith('/')]
+           assert_ok(files==['Echo99.ipa'],'exact artifact contents')
+           ipa=archive.read('Echo99.ipa')
+          assert_ok(len(ipa)==25673935 and digest(ipa)==HASH,'IPA exact bytes')
+          with zipfile.ZipFile(io.BytesIO(ipa)) as app:
+           p=plistlib.loads(app.read('Payload/Runner.app/Info.plist'))
+           assert_ok(p['CFBundleShortVersionString']=='1.3.3' and str(p['CFBundleVersion'])=='18' and p['MinimumOSVersion']=='15.0' and p['CFBundleIdentifier']=='com.echo99.echo99','IPA version')
+           assert_ok('Payload/Runner.app/Frameworks/objective_c.framework/objective_c' in app.namelist(),'native asset retained')
+          d=api('releases/'+str(RID))
+          assert_ok(d['draft'] and d['prerelease'] and d['target_commitish']=='repair/build-fix-1.3.2' and not d['assets'] and d['name']=='Echo99 iPhone 1.3.3 Build 18 - Audio Test' and SHA in d['body'] and HASH in d['body'],'existing private draft')
+          assert_ok(d['tag_name']=='untagged-74ab0b8c7a7b1ab85e4e' or d['tag_name']==TAG,'draft tag identity')
+          refs=api('git/matching-refs/tags/'+TAG)
+          assert_ok(not refs,'test18 tag must not exist')
+          open(NAME,'wb').write(ipa)
+          # API upload stays inside this repository runner using its short-lived job token.
+          url=d['upload_url'].split('{')[0]+'?name='+urllib.parse.quote(NAME)
+          raw=subprocess.check_output(['gh','api','--method','POST',url,'-H','Content-Type: application/octet-stream','--input',NAME])
+          u=json.loads(raw)
+          assert_ok(u['name']==NAME and u['size']==len(ipa) and u['state']=='uploaded' and u.get('digest')=='sha256:'+HASH,'uploaded asset digest')
+          check=subprocess.check_output(['gh','api',BASE+'/releases/assets/'+str(u['id']),'-H','Accept: application/octet-stream'])
+          assert_ok(digest(check)==HASH,'uploaded readback exact bytes')
+          assert_ok(all(fingerprint(api('releases/'+str(i)))==v for i,v in old.items()),'old releases unchanged before publication')
+          body={'tag_name':TAG,'target_commitish':SHA,'draft':False,'prerelease':True,'make_latest':'false'}
+          result=json.loads(subprocess.check_output(['gh','api','--method','PATCH',BASE+'/releases/'+str(RID),'--input','-'],input=json.dumps(body).encode()))
+          assert_ok(result['id']==RID and not result['draft'] and result['prerelease'] and result['tag_name']==TAG,'published expected test release')
+          assert_ok(api('git/ref/tags/'+TAG)['object']['sha']==SHA,'exact source tag')
+          assert_ok(api('releases/latest')['id']==435898907,'stable latest after')
+          assert_ok(all(fingerprint(api('releases/'+str(i)))==v for i,v in old.items()),'old releases unchanged after publication')
+          print('Published verified unchanged IPA:',u['browser_download_url'])
+          print('Release:',result['html_url'])
+          PY
