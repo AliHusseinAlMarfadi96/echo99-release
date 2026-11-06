@@ -10,14 +10,7 @@ if [[ ! -d "$APP" ]]; then
   exit 1
 fi
 
-SOUNDS_DIR="$APP/Frameworks/App.framework/flutter_assets/assets/sounds"
-if command -v ffmpeg >/dev/null 2>&1 && [[ -d "$SOUNDS_DIR" ]]; then
-  ffmpeg -y -v error -ss 0.79 -to 1.80 -i "$SOUNDS_DIR/snakes/snake.mp3" -af "afade=t=in:st=0.79:d=0.02,afade=t=out:st=1.75:d=0.05" -ac 1 -ar 44100 -b:a 128k /tmp/snake.mp3 && mv /tmp/snake.mp3 "$SOUNDS_DIR/snakes/snake.mp3" || true
-  ffmpeg -y -v error -ss 0.11 -to 0.95 -i "$SOUNDS_DIR/snakes/dice_roll.mp3" -af "afade=t=in:st=0.11:d=0.01,afade=t=out:st=0.91:d=0.04" -ac 1 -ar 44100 -b:a 128k /tmp/dice_roll.mp3 && mv /tmp/dice_roll.mp3 "$SOUNDS_DIR/dice_roll.mp3" || true
-  ffmpeg -y -v error -ss 0.00 -to 0.18 -i "$SOUNDS_DIR/snakes/step.mp3" -af "afade=t=out:st=0.14:d=0.04" -ac 1 -ar 44100 -b:a 128k /tmp/step.mp3 && mv /tmp/step.mp3 "$SOUNDS_DIR/snakes/step.mp3" || true
-  ffmpeg -y -v error -ss 0.03 -to 0.40 -i "$SOUNDS_DIR/snakes/ladder.mp3" -af "afade=t=in:st=0.03:d=0.01,afade=t=out:st=0.36:d=0.04" -ac 1 -ar 44100 -b:a 128k /tmp/ladder.mp3 && mv /tmp/ladder.mp3 "$SOUNDS_DIR/snakes/ladder.mp3" || true
-  ffmpeg -y -v error -ss 0.00 -to 0.80 -i "$SOUNDS_DIR/jk_burn_cards.mp3" -ac 1 -ar 44100 -b:a 128k /tmp/jk_burn_cards.mp3 && mv /tmp/jk_burn_cards.mp3 "$SOUNDS_DIR/jk_burn_cards.mp3" || true
-fi
+# Preserve supplied sound assets byte-for-byte; no packaging-time trims.
 
 python3 - "$APP" << 'PY'
 import os, sys, struct, shutil, plistlib
