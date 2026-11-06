@@ -211,12 +211,46 @@ test('moderate: Firestore failure rolls the room grant back', async () => {
       auth: { uid: 'host' },
       data: { tableId: 't1', targetId: 'u1', action: 'mute' },
     }),
-    (e) => e.code === 'internal' && /room unchanged/.test(e.message),
+    (e) =>
+      e.code === 'internal' &&
+      /restored to its previous value/.test(e.message) &&
+      !/room unchanged/.test(e.message),
   );
   assert.equal(calls.length, 2, 'mute then rollback');
   assert.equal(calls[0].options.permission.canPublish, false);
   // u1 was unmuted before, so the rollback restores publish rights.
   assert.equal(calls[1].options.permission.canPublish, true);
+  updateImpl = async (data) => updates.push(data);
+});
+
+test('moderate: rollback failure surfaces a partial-failure error', async () => {
+  const calls = [];
+  mod.__setRoomServiceFactoryForTests(() => ({
+    updateParticipant: async (room, identity, options) => {
+      calls.push({ room, identity, options });
+      if (calls.length === 2) {
+        throw new Error('livekit rollback down');
+      }
+    },
+    removeParticipant: async () => {},
+  }));
+  snap = SEATED();
+  updateImpl = async () => {
+    throw new Error('firestore down');
+  };
+  await assert.rejects(
+    moderate({
+      auth: { uid: 'host' },
+      data: { tableId: 't1', targetId: 'u1', action: 'mute' },
+    }),
+    (e) =>
+      e.code === 'internal' &&
+      /rollback also failed/.test(e.message) &&
+      /may disagree/.test(e.message) &&
+      !/room unchanged/.test(e.message),
+  );
+  assert.equal(calls.length, 2, 'mute then failed rollback');
+  assert.equal(updates.length, 0, 'table never written');
   updateImpl = async (data) => updates.push(data);
 });
 
