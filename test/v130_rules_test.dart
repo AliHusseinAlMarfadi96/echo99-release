@@ -934,6 +934,16 @@ void main() {
       expect(plan[2].startMs - plan[1].startMs, 250);
     });
 
+    test('durations table matches the shipped clips (audio audit)', () {
+      // Measured with ffprobe from assets/sounds: jk_burn_cards carries 0.7s
+      // of audio plus a 60s silent tail in the user's supplied clip;
+      // scheduling uses the audible length.
+      expect(soundDurationsMs['jk_burn_cards'], 712);
+      expect(soundDurationsMs['snakes/snake'], 2456);
+      expect(soundDurationsMs['snakes/ladder'], 496);
+      expect(soundDurationsMs['snakes/dice_roll'], 1071);
+    });
+
     test('start cue is the game-start sound', () {
       final s = startGame(_two(gameSnakes), Random(1), 0).state;
       expect(s.cue!.also, [snakesStartSound]);
