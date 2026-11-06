@@ -14,11 +14,12 @@ const { TokenVerifier } = require('livekit-server-sdk');
 
 let snap;
 let updates;
+let updateImpl = async (data) => updates.push(data);
 firestore.getFirestore = () => ({
   collection: () => ({
     doc: () => ({
       get: async () => snap,
-      update: async (data) => updates.push(data),
+      update: async (data) => updateImpl(data),
     }),
   }),
 });
@@ -135,7 +136,14 @@ test('moderate: host mute updates room grant and seat flags', async () => {
       op: 'update',
       room: 't1',
       identity: 'u1',
-      options: { permission: { canPublish: false } },
+      options: {
+        // Full grant set every call: listener role preserved on mute.
+        permission: {
+          canPublish: false,
+          canSubscribe: true,
+          canPublishData: true,
+        },
+      },
     },
   ]);
   const players = updates[0].players;
@@ -152,7 +160,11 @@ test('moderate: unmute and remove map to the right server calls', async () => {
     auth: { uid: 'host' },
     data: { tableId: 't1', targetId: 'u2', action: 'unmute' },
   });
-  assert.equal(calls[0].options.permission.canPublish, true);
+  assert.deepEqual(calls[0].options.permission, {
+    canPublish: true,
+    canSubscribe: true,
+    canPublishData: true,
+  });
   assert.deepEqual(updates[0].board.mutedMics, []);
   await moderate({
     auth: { uid: 'host' },
@@ -160,6 +172,52 @@ test('moderate: unmute and remove map to the right server calls', async () => {
   });
   assert.deepEqual(calls[1], { op: 'remove', room: 't1', identity: 'u1' });
   assert.equal(updates.length, 1, 'remove leaves seats untouched');
+});
+
+test('moderate: LiveKit failure leaves table state untouched', async () => {
+  snap = SEATED();
+  updates = [];
+  mod.__setRoomServiceFactoryForTests(() => ({
+    updateParticipant: async () => {
+      throw new Error('livekit down');
+    },
+    removeParticipant: async () => {},
+  }));
+  await assert.rejects(
+    moderate({
+      auth: { uid: 'host' },
+      data: { tableId: 't1', targetId: 'u1', action: 'mute' },
+    }),
+    /livekit down/,
+  );
+  assert.equal(updates.length, 0, 'no Firestore write after LiveKit failure');
+});
+
+test('moderate: Firestore failure rolls the room grant back', async () => {
+  snap = SEATED();
+  const calls = [];
+  mod.__setRoomServiceFactoryForTests(() => ({
+    updateParticipant: async (room, identity, options) =>
+      calls.push({ op: 'update', room, identity, options }),
+    removeParticipant: async () => {},
+  }));
+  // Force the Firestore write to fail (the module caches db at load).
+  snap = SEATED();
+  updateImpl = async () => {
+    throw new Error('firestore down');
+  };
+  await assert.rejects(
+    moderate({
+      auth: { uid: 'host' },
+      data: { tableId: 't1', targetId: 'u1', action: 'mute' },
+    }),
+    (e) => e.code === 'internal' && /room unchanged/.test(e.message),
+  );
+  assert.equal(calls.length, 2, 'mute then rollback');
+  assert.equal(calls[0].options.permission.canPublish, false);
+  // u1 was unmuted before, so the rollback restores publish rights.
+  assert.equal(calls[1].options.permission.canPublish, true);
+  updateImpl = async (data) => updates.push(data);
 });
 
 test('moderate: self-target and unknown action rejected', async () => {
