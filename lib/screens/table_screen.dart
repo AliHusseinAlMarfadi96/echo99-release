@@ -1776,6 +1776,9 @@ class _TableScreenState extends State<TableScreen> with WidgetsBindingObserver {
         showMode: state.game == gameJackaroo,
         initialMode: '${state.board['mode'] ?? jackarooStandard}',
         initialTimer: state.timerSeconds,
+        showTeams:
+            state.game == gameJackaroo && state.players.length == 4,
+        initialTeams: state.board['teams'] != false,
       ),
     );
     if (picked == null || !mounted) {
@@ -1783,7 +1786,12 @@ class _TableScreenState extends State<TableScreen> with WidgetsBindingObserver {
     }
     if (widget.offline) {
       await _runLocal((current) {
-        final applied = applyJackarooMode(current, picked.mode, picked.timer);
+        final applied = applyJackarooMode(
+          current,
+          picked.mode,
+          picked.timer,
+          teams: picked.teams,
+        );
         var ready = applied.state;
         if (current.game == gameSnakes) {
           ready = ready.copyWith(board: const {});
@@ -1806,6 +1814,7 @@ class _TableScreenState extends State<TableScreen> with WidgetsBindingObserver {
             hostId: scope.settings.playerId,
             mode: picked.mode,
             timerSeconds: picked.timer,
+            teams: picked.teams,
           )
         : await repo.updateTimer(
             tableId: widget.tableId,
@@ -2736,9 +2745,30 @@ class _StartSettingsDialog extends StatelessWidget {
 }
 
 class _GameSettings {
-  const _GameSettings(this.mode, this.timer);
+  const _GameSettings(this.mode, this.timer, this.teams);
   final String mode;
   final int timer;
+
+  /// 4-player Jackaroo only: teams (شركاء) vs individual. Null otherwise.
+  final bool? teams;
+}
+
+/// Test hook: builds the start-settings dialog directly (private widget).
+@visibleForTesting
+Widget buildGameSettingsDialogForTest({
+  required bool showMode,
+  required String initialMode,
+  required int initialTimer,
+  bool showTeams = false,
+  bool initialTeams = true,
+}) {
+  return _GameSettingsDialog(
+    showMode: showMode,
+    initialMode: initialMode,
+    initialTimer: initialTimer,
+    showTeams: showTeams,
+    initialTeams: initialTeams,
+  );
 }
 
 class _GameSettingsDialog extends StatefulWidget {
@@ -2746,11 +2776,17 @@ class _GameSettingsDialog extends StatefulWidget {
     required this.showMode,
     required this.initialMode,
     required this.initialTimer,
+    this.showTeams = false,
+    this.initialTeams = true,
   });
 
   final bool showMode;
   final String initialMode;
   final int initialTimer;
+
+  /// 4-player Jackaroo: host picks teams vs individual (rules PDF).
+  final bool showTeams;
+  final bool initialTeams;
 
   @override
   State<_GameSettingsDialog> createState() => _GameSettingsDialogState();
@@ -2758,6 +2794,7 @@ class _GameSettingsDialog extends StatefulWidget {
 
 class _GameSettingsDialogState extends State<_GameSettingsDialog> {
   late String _mode = widget.initialMode;
+  late bool _teams = widget.initialTeams;
   late bool _timerOn = widget.initialTimer >= minTimerSeconds;
   late final _timer = TextEditingController(
     text: widget.initialTimer >= minTimerSeconds
@@ -2798,6 +2835,26 @@ class _GameSettingsDialogState extends State<_GameSettingsDialog> {
                 ),
               ),
             ],
+            if (widget.showTeams) ...[
+              RadioGroup<bool>(
+                groupValue: _teams,
+                onChanged: (v) => setState(() => _teams = v ?? _teams),
+                child: const Column(
+                  children: [
+                    RadioListTile<bool>(
+                      value: true,
+                      title: Text('لعب الفرق'),
+                      subtitle: Text('اثنان مقابل اثنين — الشريكان متقابلان'),
+                    ),
+                    RadioListTile<bool>(
+                      value: false,
+                      title: Text('اللعب الفردي'),
+                      subtitle: Text('كل لاعب لنفسه، ولا شريك لأحد'),
+                    ),
+                  ],
+                ),
+              ),
+            ],
             SwitchListTile(
               value: _timerOn,
               onChanged: (v) => setState(() => _timerOn = v),
@@ -2831,7 +2888,9 @@ class _GameSettingsDialogState extends State<_GameSettingsDialog> {
               }
               timer = value;
             }
-            Navigator.of(context).pop(_GameSettings(_mode, timer));
+            Navigator.of(context).pop(
+              _GameSettings(_mode, timer, widget.showTeams ? _teams : null),
+            );
           },
           child: const Text('تأكيد وبدء'),
         ),
