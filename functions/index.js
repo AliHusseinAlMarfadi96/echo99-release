@@ -268,23 +268,51 @@ exports.moderateVoiceParticipant = onCall(
       LIVEKIT_API_KEY,
       livekitApiSecret.value(),
     );
+    // LiveKit applies permission objects atomically ("all desired
+    // permissions would need to be set"), so every call carries the full
+    // grant set and a mute never drops the listener role.
+    const grant = (canPublish) => ({
+      canPublish,
+      canSubscribe: true,
+      canPublishData: true,
+    });
+    const legacyMuted =
+      state.board && Array.isArray(state.board.mutedMics)
+        ? state.board.mutedMics
+        : [];
+    const previousMuted =
+      seat.micMuted === true || legacyMuted.includes(targetId);
     if (action === "remove") {
       await svc.removeParticipant(tableId, targetId);
-    } else {
-      await svc.updateParticipant(tableId, targetId, {
-        permission: { canPublish: action === "unmute" },
-      });
+      return { ok: true };
     }
 
-    // Keep the seat flag and the legacy board list in sync (older clients
-    // still read mutedMics), mirroring hostSeatControl.
-    if (action !== "remove") {
-      const players = seats.map((s) =>
-        s && s.id === targetId ? { ...s, micMuted: action === "mute" } : s,
-      );
-      const board = { ...(state.board || {}) };
-      board.mutedMics = players.filter((s) => s && s.micMuted).map((s) => s.id);
+    // Ordering: LiveKit first, Firestore second. If the LiveKit call fails
+    // the table state is untouched. If the Firestore write fails after the
+    // room changed, roll the room back to the previous grant so the two
+    // never diverge, then surface the failure.
+    await svc.updateParticipant(tableId, targetId, {
+      permission: grant(action === "unmute"),
+    });
+    const players = seats.map((s) =>
+      s && s.id === targetId ? { ...s, micMuted: action === "mute" } : s,
+    );
+    const board = { ...(state.board || {}) };
+    board.mutedMics = players.filter((s) => s && s.micMuted).map((s) => s.id);
+    try {
       await ref.update({ players, board });
+    } catch (e) {
+      try {
+        await svc.updateParticipant(tableId, targetId, {
+          permission: grant(!previousMuted),
+        });
+      } catch (rollbackError) {
+        throw new HttpsError(
+          "internal",
+          "Table write failed AND room rollback failed; host must retry the action.",
+        );
+      }
+      throw new HttpsError("internal", "Table write failed; room unchanged.");
     }
     return { ok: true };
   },
