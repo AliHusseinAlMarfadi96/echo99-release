@@ -198,7 +198,7 @@ Resolution resolvePlay({
         nextTotal: 0,
         actorLoss: loss,
         othersLoss: 0,
-        roundEnded: false,
+        roundEnded: true,
         outcome: 'bust',
         reversed: reversed,
         skipsNext: skips,
