@@ -179,14 +179,12 @@ class JackarooBoard {
     return pieces[hit.$1]![hit.$2] == 0;
   }
 
-  bool inWall(Map<int, (String, int)> occ, int square) {
-    final color = colorAt(occ, square);
-    if (color == null) {
-      return false;
-    }
-    final before = colorAt(occ, square - 1 + jackarooTrack);
-    final after = colorAt(occ, square + 1);
-    return before == color || after == color;
+  /// A stone with ANY stone directly behind it is the protected front of a
+  /// wall — any colors, even mixed (rules PDF rule 4): nobody passes it and
+  /// nobody lands on it. The rearmost stone of a run stays exposed.
+  bool wallFront(Map<int, (String, int)> occ, int square) {
+    return occ[square] != null &&
+        occ[(square - 1 + jackarooTrack) % jackarooTrack] != null;
   }
 
   bool finished(String owner) =>
@@ -194,10 +192,18 @@ class JackarooBoard {
 }
 
 class JackarooStep {
-  const JackarooStep(this.board, this.sounds, this.text);
+  const JackarooStep(
+    this.board,
+    this.sounds,
+    this.text, [
+    this.kills = const [],
+  ]);
   final JackarooBoard board;
   final List<String> sounds;
   final String text;
+
+  /// Pieces this step returns to their yard: (owner, piece index).
+  final List<(String, int)> kills;
 }
 
 /// Team 1 (Red/Green) pulses with dice_move, Team 2 (Blue/Yellow) with
@@ -221,6 +227,35 @@ const jackarooActionSound = 'jk_card_play';
 int jackarooSixChain(MatchState state) =>
     (state.board['sixChain'] as num?)?.toInt() ?? 0;
 
+/// The partner across the table in a 4-player team game, else null.
+String? jackarooPartner(MatchState state, String owner) {
+  if (state.players.length != 4) {
+    return null;
+  }
+  final idx = state.players.indexWhere((s) => s.id == owner);
+  if (idx < 0) {
+    return null;
+  }
+  return state.players[(idx + 2) % 4].id;
+}
+
+/// Test for stones of [owner]'s own side: their own and their partner's.
+bool Function(String) jackarooFriendlyTest(MatchState state, String owner) {
+  final partner = jackarooPartner(state, owner);
+  return (victim) => victim == owner || victim == partner;
+}
+
+/// Whose stones [owner] moves: the partner's once all four of their own are
+/// safe in a team game — a finished player keeps playing on the partner's
+/// stones (rules PDF).
+String jackarooPlayAs(MatchState state, String owner) {
+  final partner = jackarooPartner(state, owner);
+  if (partner != null && JackarooBoard.of(state).finished(owner)) {
+    return partner;
+  }
+  return owner;
+}
+
 String jackarooCardRank(String code) {
   final card = PlayingCard.parse(code);
   return card == null ? '' : card.englishRank;
@@ -234,6 +269,7 @@ JackarooStep? jackarooAdvance(
   int index,
   int steps, {
   bool kingSweep = false,
+  bool Function(String victim)? isFriendly,
 }) {
   final list = board.pieces[owner];
   if (list == null || index < 0 || index >= list.length || steps == 0) {
@@ -271,33 +307,31 @@ JackarooStep? jackarooAdvance(
     if (hit == null) {
       continue;
     }
-    if (hit.$1 == owner || board.colors[hit.$1] == myColor) {
-      // Complex king sweep returns EVERY stone on its path, including the
-      // player's own and the partner's (rules PDF, complex difference 3).
-      if (kingSweep) {
-        kills.add(hit);
-        continue;
-      }
-      return null; // same color never passes or stacks
-    }
     if (board.baseSafe(occ, abs)) {
-      return null; // a piece on its own base is safe and blocks
+      // A stone on its own base can be neither passed, landed on, nor
+      // displaced by any card — not by its owner and not by a sweeping king
+      // (rules PDF rule 3 and the complex base immunity).
+      return null;
     }
     if (kingSweep) {
+      // Complex king sweep returns EVERY stone on its path, including the
+      // player's own and the partner's, and breaks walls (rules PDF).
       kills.add(hit);
       continue;
     }
-    if (!last && board.inWall(occ, abs)) {
-      return null;
+    if (board.wallFront(occ, abs)) {
+      return null; // protected wall front: no passing, no landing
     }
     if (last) {
-      if (board.inWall(occ, abs)) {
-        return null;
-      }
+      // Landing kills whatever sits there — opponent, partner, or the
+      // player's own stone (rules PDF: capture does not distinguish colors).
       kills.add(hit);
-    } else {
-      continue; // single pieces may be jumped over
+      continue;
     }
+    if (hit.$1 == owner || board.colors[hit.$1] == myColor) {
+      return null; // own color may be landed on, never passed
+    }
+    // Other colors may be passed freely: passing never kills.
   }
   final next = board.clone();
   for (final kill in kills) {
@@ -310,11 +344,14 @@ JackarooStep? jackarooAdvance(
   );
   // One landing clip after the last step (never replaces a step pulse).
   if (kills.isNotEmpty) {
-    sounds.add('jk_kill');
+    // Returning your own or your partner's stone has its own clip, distinct
+    // from capturing an opponent (rules PDF).
+    final friendly = isFriendly ?? ((victim) => victim == owner);
+    sounds.add(kills.any((k) => friendly(k.$1)) ? 'jk_kill_own' : 'jk_kill');
   } else if (target >= jackarooTrack && start < jackarooTrack) {
     sounds.add('jk_safe_enter');
   }
-  return JackarooStep(next, sounds, '');
+  return JackarooStep(next, sounds, '', kills);
 }
 
 JackarooStep? jackarooExit(JackarooBoard board, String owner, int index) {
@@ -437,16 +474,18 @@ List<JackarooMove> jackarooMovesForCard(
     return const [];
   }
   final board = JackarooBoard.of(state);
-  final mine = board.pieces[owner] ?? const <int>[];
+  final playAs = jackarooPlayAs(state, owner);
+  final friendly = jackarooFriendlyTest(state, owner);
+  final mine = board.pieces[playAs] ?? const <int>[];
   final rank = parsed.rank;
   final moves = <JackarooMove>[];
   // Exits: A and K only, per the supplied rules PDF (a 6 is a plain walk).
   // Every base piece is listed so the player picks which one leaves.
   if (rank == 1 || rank == 13) {
     for (var i = 0; i < mine.length; i++) {
-      if (mine[i] == jackarooHome && jackarooExit(board, owner, i) != null) {
+      if (mine[i] == jackarooHome && jackarooExit(board, playAs, i) != null) {
         moves.add(
-          JackarooMove(card: card, kind: 'exit', owner: owner, piece: i),
+          JackarooMove(card: card, kind: 'exit', owner: playAs, piece: i),
         );
         break; // A / K: yard pieces are equivalent
       }
@@ -455,17 +494,17 @@ List<JackarooMove> jackarooMovesForCard(
   if (rank == 11) {
     for (var i = 0; i < mine.length; i++) {
       for (final other in board.pieces.keys) {
-        if (other == owner) {
+        if (other == playAs) {
           continue;
         }
         final list = board.pieces[other]!;
         for (var j = 0; j < list.length; j++) {
-          if (jackarooSwap(board, owner, i, other, j) != null) {
+          if (jackarooSwap(board, playAs, i, other, j) != null) {
             moves.add(
               JackarooMove(
                 card: card,
                 kind: 'swap',
-                owner: owner,
+                owner: playAs,
                 piece: i,
                 targetOwner: other,
                 targetPiece: j,
@@ -479,12 +518,13 @@ List<JackarooMove> jackarooMovesForCard(
   }
   if (rank == 4) {
     for (var i = 0; i < mine.length; i++) {
-      if (jackarooAdvance(board, owner, i, -4) != null) {
+      if (jackarooAdvance(board, playAs, i, -4, isFriendly: friendly) !=
+          null) {
         moves.add(
           JackarooMove(
             card: card,
             kind: 'back',
-            owner: owner,
+            owner: playAs,
             piece: i,
             steps: 4,
           ),
@@ -495,19 +535,20 @@ List<JackarooMove> jackarooMovesForCard(
   }
   if (rank == 7) {
     for (var i = 0; i < mine.length; i++) {
-      if (jackarooAdvance(board, owner, i, 7) != null) {
+      if (jackarooAdvance(board, playAs, i, 7, isFriendly: friendly) !=
+          null) {
         moves.add(
           JackarooMove(
             card: card,
             kind: 'forward',
-            owner: owner,
+            owner: playAs,
             piece: i,
             steps: 7,
           ),
         );
       }
       for (var a = 1; a <= 6; a++) {
-        final first = jackarooAdvance(board, owner, i, a);
+        final first = jackarooAdvance(board, playAs, i, a, isFriendly: friendly);
         if (first == null) {
           continue;
         }
@@ -515,15 +556,17 @@ List<JackarooMove> jackarooMovesForCard(
           if (j == i) {
             continue;
           }
-          if (jackarooAdvance(first.board, owner, j, 7 - a) != null) {
+          if (jackarooAdvance(first.board, playAs, j, 7 - a,
+                  isFriendly: friendly) !=
+              null) {
             moves.add(
               JackarooMove(
                 card: card,
                 kind: 'split',
-                owner: owner,
+                owner: playAs,
                 piece: i,
                 steps: a,
-                owner2: owner,
+                owner2: playAs,
                 piece2: j,
                 steps2: 7 - a,
               ),
@@ -536,7 +579,7 @@ List<JackarooMove> jackarooMovesForCard(
   }
   final owners = rank == 5 && board.complex
       ? board.pieces.keys.toList()
-      : [owner];
+      : [playAs];
   for (final who in owners) {
     final list = board.pieces[who]!;
     for (var i = 0; i < list.length; i++) {
@@ -547,12 +590,15 @@ List<JackarooMove> jackarooMovesForCard(
         final sweep = rank == 13 && board.complex;
         // Complex 5: an enemy piece may be pushed along the track but never
         // into its own safe home (rules PDF) — such moves are not offered.
-        if (who != owner &&
+        // Your own side's pieces (yours and your partner's) may be homed.
+        if (!friendly(who) &&
             list[i] != jackarooHome &&
             list[i] + steps >= jackarooTrack) {
           continue;
         }
-        if (jackarooAdvance(board, who, i, steps, kingSweep: sweep) != null) {
+        if (jackarooAdvance(board, who, i, steps,
+                kingSweep: sweep, isFriendly: friendly) !=
+            null) {
           moves.add(
             JackarooMove(
               card: card,
@@ -596,8 +642,11 @@ List<JackarooMove> jackarooLegalMoves(MatchState state, String owner) {
     // (no card can free you for the rest of this deal). With pieces on the
     // track another player may open the path, so one chosen card burns and
     // the turn passes.
-    final allInBase = (JackarooBoard.of(state).pieces[owner] ?? const <int>[])
-        .every((piece) => piece == jackarooHome);
+    final playAs = jackarooPlayAs(state, owner);
+    final allInBase =
+        (JackarooBoard.of(state).pieces[playAs] ?? const <int>[]).every(
+          (piece) => piece == jackarooHome,
+        );
     if (allInBase) {
       return [JackarooMove(card: hand.first, kind: 'burnAll', owner: owner)];
     }
@@ -607,6 +656,61 @@ List<JackarooMove> jackarooLegalMoves(MatchState state, String owner) {
     ];
   }
   return moves;
+}
+
+/// Preview of what a movement move returns to yards, for the option label.
+List<(String, int)> jackarooMoveKills(MatchState state, JackarooMove move) {
+  final board = JackarooBoard.of(state);
+  switch (move.kind) {
+    case 'back':
+      return jackarooAdvance(board, move.owner, move.piece, -4)?.kills ??
+          const [];
+    case 'split':
+      final first = jackarooAdvance(board, move.owner, move.piece, move.steps);
+      if (first == null) {
+        return const [];
+      }
+      final second = jackarooAdvance(
+        first.board,
+        move.owner2,
+        move.piece2,
+        move.steps2,
+      );
+      return [...first.kills, ...(second?.kills ?? const <(String, int)>[])];
+    case 'forward':
+      final rank = PlayingCard.parse(move.card)?.rank ?? 0;
+      return jackarooAdvance(
+            board,
+            move.owner,
+            move.piece,
+            move.steps,
+            kingSweep: rank == 13 && board.complex,
+          )?.kills ??
+          const [];
+  }
+  return const [];
+}
+
+/// Tells the chooser exactly who goes back to the yard, with an explicit
+/// warning when it is their own or their partner's stone (rules PDF).
+String jackarooKillSuffix(MatchState state, List<(String, int)> kills) {
+  if (kills.isEmpty) {
+    return '';
+  }
+  final me = state.current?.id;
+  final partner = me == null ? null : jackarooPartner(state, me);
+  final parts = <String>[];
+  for (final k in kills) {
+    final label = jackarooPieceLabel(state, k.$1, k.$2);
+    if (k.$1 == me) {
+      parts.add('تنبيه: سيرجع حجرك $label إلى بيته');
+    } else if (k.$1 == partner) {
+      parts.add('تنبيه: سيرجع حجر شريكك $label إلى بيته');
+    } else {
+      parts.add('سيرجع $label إلى بيته');
+    }
+  }
+  return ' — ${parts.join('، ')}';
 }
 
 String jackarooMoveLabel(MatchState state, JackarooMove move) {
@@ -623,10 +727,12 @@ String jackarooMoveLabel(MatchState state, JackarooMove move) {
           'مع ${piece(move.targetOwner, move.targetPiece)} '
           '(${_where(board, move.targetOwner, board.pieces[move.targetOwner]![move.targetPiece])})';
     case 'back':
-      return '$cardName: إرجاع ${piece(move.owner, move.piece)} 4 خطوات';
+      return '$cardName: إرجاع ${piece(move.owner, move.piece)} 4 خطوات'
+          '${jackarooKillSuffix(state, jackarooMoveKills(state, move))}';
     case 'split':
       return '$cardName: ${piece(move.owner, move.piece)} ${move.steps} '
-          'و${piece(move.owner2, move.piece2)} ${move.steps2}';
+          'و${piece(move.owner2, move.piece2)} ${move.steps2}'
+          '${jackarooKillSuffix(state, jackarooMoveKills(state, move))}';
     case 'burnNext':
       return '$cardName: حرق ورقة من اللاعب التالي';
     case 'burnAll':
@@ -638,7 +744,8 @@ String jackarooMoveLabel(MatchState state, JackarooMove move) {
       return '$cardName: ثالث ستة متتالية — يخسر الدور';
     default:
       return '$cardName: تحريك ${piece(move.owner, move.piece)} '
-          '${move.steps} خطوات';
+          '${move.steps} خطوات'
+          '${jackarooKillSuffix(state, jackarooMoveKills(state, move))}';
   }
 }
 
@@ -651,7 +758,8 @@ EngineResult startJackaroo(MatchState state, Random random, int nowMillis) {
   final colors = <String, int>{};
   final pieces = <String, List<int>>{};
   for (var i = 0; i < count; i++) {
-    colors[state.players[i].id] = i;
+    // Two players sit opposite each other: Red on 0, Green on 38 (rules PDF).
+    colors[state.players[i].id] = count == 2 ? i * 2 : i;
     pieces[state.players[i].id] = List.filled(jackarooPieces, jackarooHome);
   }
   final mode = '${state.board['mode'] ?? jackarooStandard}';
@@ -738,6 +846,8 @@ EngineResult playJackaroo(
     return EngineResult(state, 'حركة غير مسموحة');
   }
   var board = JackarooBoard.of(state);
+  final startingBoard = board;
+  final friendly = jackarooFriendlyTest(state, playerId);
   final hands = {
     for (final e in state.hands.entries) e.key: [...e.value],
   };
@@ -784,17 +894,30 @@ EngineResult playJackaroo(
       sounds.add('jk_jack_swap');
       text = '${seat.name} بدّل قطعة بالولد';
     case 'back':
-      final step = jackarooAdvance(board, move.owner, move.piece, -4)!;
+      final step = jackarooAdvance(
+        board,
+        move.owner,
+        move.piece,
+        -4,
+        isFriendly: friendly,
+      )!;
       board = step.board;
       sounds.addAll(step.sounds);
       text = '${seat.name} أرجع قطعة 4 خطوات';
     case 'split':
-      final a = jackarooAdvance(board, move.owner, move.piece, move.steps)!;
+      final a = jackarooAdvance(
+        board,
+        move.owner,
+        move.piece,
+        move.steps,
+        isFriendly: friendly,
+      )!;
       final b = jackarooAdvance(
         a.board,
         move.owner2,
         move.piece2,
         move.steps2,
+        isFriendly: friendly,
       )!;
       board = b.board;
       sounds
@@ -809,6 +932,7 @@ EngineResult playJackaroo(
         move.piece,
         move.steps,
         kingSweep: rank == 13 && board.complex,
+        isFriendly: friendly,
       )!;
       board = step.board;
       sounds.addAll(step.sounds);
@@ -841,27 +965,46 @@ EngineResult playJackaroo(
     boardMap['isForcedToBurn'] = false;
     boardMap['forcedBurnUid'] = '';
   }
-  // Win check.
+  // Win check. In a 4-player team game a side wins only when all EIGHT
+  // stones are safe; a player who finishes keeps playing on the partner's
+  // stones (rules PDF). Individual and 2-player games end at the first
+  // finisher.
+  var finishNote = '';
   for (final s in state.players) {
-    if (board.finished(s.id)) {
-      return EngineResult(
-        state.copyWith(
-          status: 'finished',
-          hands: const {},
-          discard: discard,
-          lastCard: move.card,
-          cue: SoundCue(
-            type: 'jackaroo',
-            nonce: nonce,
-            also: [...unique, 'jk_round_end'],
-          ),
-          winnerId: s.id,
-          nonce: nonce,
-          turnStartedAt: nowMillis,
-          board: {...boardMap, 'text': '$text. فاز ${s.name}'},
-        ),
-      );
+    if (!board.finished(s.id)) {
+      continue;
     }
+    final partner = jackarooPartner(state, s.id);
+    if (partner != null && !board.finished(partner)) {
+      if (!startingBoard.finished(s.id)) {
+        finishNote = '. ${s.name} أنهى حجاره وصار يلعب بحجارة شريكه';
+      }
+      continue;
+    }
+    final winText = partner == null
+        ? 'فاز ${s.name}'
+        : 'فاز فريق ${s.name} و'
+              '${state.players.firstWhere((p) => p.id == partner).name}';
+    return EngineResult(
+      state.copyWith(
+        status: 'finished',
+        hands: const {},
+        discard: discard,
+        lastCard: move.card,
+        cue: SoundCue(
+          type: 'jackaroo',
+          nonce: nonce,
+          also: [...unique, 'jk_round_end'],
+        ),
+        winnerId: s.id,
+        nonce: nonce,
+        turnStartedAt: nowMillis,
+        board: {...boardMap, 'text': '$text. $winText'},
+      ),
+    );
+  }
+  if (finishNote.isNotEmpty) {
+    boardMap['text'] = '${boardMap['text']}$finishNote';
   }
   var deck = [...state.deck];
   // Next player who still holds cards; redeal when every hand is empty.
