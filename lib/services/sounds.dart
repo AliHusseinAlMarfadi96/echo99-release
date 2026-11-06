@@ -83,14 +83,15 @@ class SoundBoard {
 
   String _asset(String name) => 'sounds/$name.mp3';
 
-  Future<void> loop(String name) async {
-    if (!events.contains(name)) {
+  Future<void> loop(String name, {bool repeat = true}) async {
+    if (!events.contains(name) || _disposed) {
       return;
     }
     try {
       await _loop.stop();
+      if (_disposed) return;
       await _initCtx();
-      await _loop.playAsset(_asset(name), loop: true);
+      await _loop.playAsset(_asset(name), loop: repeat);
     } catch (_) {}
   }
 
