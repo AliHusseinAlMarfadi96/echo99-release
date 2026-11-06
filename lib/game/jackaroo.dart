@@ -434,19 +434,15 @@ List<JackarooMove> jackarooMovesForCard(
   final mine = board.pieces[owner] ?? const <int>[];
   final rank = parsed.rank;
   final moves = <JackarooMove>[];
-  // Third consecutive 6 in one turn: the turn is forfeited.
-  if (rank == 6 && jackarooSixChain(state) >= 2) {
-    return [JackarooMove(card: card, kind: 'sixForfeit', owner: owner)];
-  }
-  // Exits (A, K and — per the Echo99 rule — 6). Every base piece is listed
-  // so the player picks which one leaves.
-  if (rank == 1 || rank == 13 || rank == 6) {
+  // Exits: A and K only, per the supplied rules PDF (a 6 is a plain walk).
+  // Every base piece is listed so the player picks which one leaves.
+  if (rank == 1 || rank == 13) {
     for (var i = 0; i < mine.length; i++) {
       if (mine[i] == jackarooHome && jackarooExit(board, owner, i) != null) {
         moves.add(
           JackarooMove(card: card, kind: 'exit', owner: owner, piece: i),
         );
-        if (rank != 6) break; // A / K: yard pieces are equivalent
+        break; // A / K: yard pieces are equivalent
       }
     }
   }
@@ -538,7 +534,10 @@ List<JackarooMove> jackarooMovesForCard(
   for (final who in owners) {
     final list = board.pieces[who]!;
     for (var i = 0; i < list.length; i++) {
-      for (final steps in _forwardSteps(rank)) {
+      for (final steps
+          in (rank == 13 && !board.complex
+              ? const <int>[]
+              : _forwardSteps(rank))) {
         final sweep = rank == 13 && board.complex;
         if (jackarooAdvance(board, who, i, steps, kingSweep: sweep) != null) {
           moves.add(
@@ -784,19 +783,11 @@ EngineResult playJackaroo(
   final nonce = state.nonce + 1;
   // Every step pulse is kept (no de-duplication: one clip per step).
   final unique = [...sounds];
-  final rank = PlayingCard.parse(move.card)?.rank ?? 0;
-  final isSix =
-      rank == 6 && move.kind != 'burnForced' && move.kind != 'burnAll';
-  final chain = move.kind == 'sixForfeit'
-      ? 0
-      : isSix
-      ? jackarooSixChain(state) + 1
-      : 0;
-  final playAgain = isSix && move.kind != 'sixForfeit' && mine.isNotEmpty;
+  // A 6 is a plain walk (supplied rules): no replay, no chain, no forfeit.
   final boardMap = <String, dynamic>{
     ...board.toMap(),
-    'sixChain': playAgain ? chain : 0,
-    'text': playAgain ? '$text — ستة: العب ورقة أخرى الآن' : text,
+    'sixChain': 0,
+    'text': text,
   };
   if (move.kind == 'burnNext') {
     final nextIndex = (state.turnIndex + 1) % state.players.length;
@@ -829,21 +820,6 @@ EngineResult playJackaroo(
     }
   }
   var deck = [...state.deck];
-  // A 6 gives the same player another card immediately.
-  if (playAgain) {
-    return EngineResult(
-      state.copyWith(
-        deck: deck,
-        discard: discard,
-        hands: hands,
-        lastCard: move.card,
-        cue: SoundCue(type: 'jackaroo', nonce: nonce, also: unique),
-        nonce: nonce,
-        turnStartedAt: nowMillis,
-        board: boardMap,
-      ),
-    );
-  }
   // Next player who still holds cards; redeal when every hand is empty.
   var next = state.turnIndex;
   var found = false;
