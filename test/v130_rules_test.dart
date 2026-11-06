@@ -357,7 +357,146 @@ void main() {
       expect(moves.where((m) => m.kind == 'forward'), isNotEmpty);
     });
 
-    test('forward steps pulse per square, team colors alternate clips', () {
+  group('Jackaroo rules PDF conformity', () {
+    MatchState jk({
+      required List<int> a,
+      required List<int> b,
+      required List<String> handA,
+      List<String> handB = const ['H2', 'H3'],
+      bool complex = false,
+    }) {
+      var state = _two(gameJackaroo);
+      state = applyJackarooMode(
+        state,
+        complex ? jackarooComplex : jackarooStandard,
+        0,
+      ).state;
+      state = startGame(state, Random(2), 0).state;
+      return MatchState.fromMap({
+        ...state.toMap(),
+        'turnIndex': 0,
+        'hands': {'A': handA, 'B': handB},
+        'board': {
+          'mode': complex ? jackarooComplex : jackarooStandard,
+          'colors': {'A': 0, 'B': 1},
+          'pieces': {'A': a, 'B': b},
+          'sixChain': 0,
+        },
+      }, 't');
+    }
+
+    test('blocked on track: burn one chosen card, not the whole hand', () {
+      const h = jackarooHome;
+      // A's only track piece sits at 75; a 6 overshoots the safe lane end.
+      final s = jk(a: [75, h, h, h], b: [h, h, h, h], handA: ['S6', 'H6']);
+      final moves = jackarooLegalMoves(s, 'A');
+      expect(moves.map((m) => m.kind).toSet(), {'burn'});
+      expect(moves, hasLength(2));
+      final r = playJackaroo(
+        s,
+        playerId: 'A',
+        move: moves.first,
+        random: Random(1),
+        nowMillis: 1,
+      );
+      expect(r.error, isNull);
+      expect(r.state.hands['A']!.length, 1, reason: 'only the burned card');
+      expect(r.state.cue!.also, ['jk_burn_cards']);
+      expect(r.state.current!.id, 'B');
+    });
+
+    test('all pieces in base with no exit card: the whole hand burns', () {
+      const h = jackarooHome;
+      final s = jk(a: [h, h, h, h], b: [h, h, h, h], handA: ['S6', 'H9']);
+      final moves = jackarooLegalMoves(s, 'A');
+      expect(moves.single.kind, 'burnAll');
+      final r = playJackaroo(
+        s,
+        playerId: 'A',
+        move: moves.single,
+        random: Random(1),
+        nowMillis: 1,
+      );
+      expect(r.error, isNull);
+      expect(r.state.hands['A'], isEmpty);
+      expect(r.state.cue!.also, ['jk_burn_all']);
+    });
+
+    test('complex 10 forces a burn only when another player holds cards', () {
+      const h = jackarooHome;
+      final withCards = jk(
+        a: [10, h, h, h],
+        b: [h, h, h, h],
+        handA: ['S10'],
+        handB: ['H2'],
+        complex: true,
+      );
+      expect(
+        jackarooMovesForCard(withCards, 'A', 'S10').map((m) => m.kind),
+        contains('burnNext'),
+      );
+      final noCards = jk(
+        a: [10, h, h, h],
+        b: [h, h, h, h],
+        handA: ['S10'],
+        handB: [],
+        complex: true,
+      );
+      expect(
+        jackarooMovesForCard(noCards, 'A', 'S10').map((m) => m.kind),
+        isNot(contains('burnNext')),
+      );
+    });
+
+    test('complex king sweep returns own stones on its path', () {
+      const h = jackarooHome;
+      final s = jk(
+        a: [10, 15, h, h],
+        b: [h, h, h, h],
+        handA: ['S13'],
+        complex: true,
+      );
+      final moves = jackarooMovesForCard(s, 'A', 'S13');
+      final walk = moves.singleWhere(
+        (m) => m.kind == 'forward' && m.piece == 0,
+      );
+      final r = playJackaroo(
+        s,
+        playerId: 'A',
+        move: walk,
+        random: Random(1),
+        nowMillis: 1,
+      );
+      expect(r.error, isNull);
+      final board = JackarooBoard.of(r.state);
+      expect(board.pieces['A']![0], 23);
+      expect(
+        board.pieces['A']![1],
+        jackarooHome,
+        reason: 'swept own stone returns home',
+      );
+    });
+
+    test('normal king walk is not offered; complex 5 cannot home an enemy', () {
+      const h = jackarooHome;
+      final normal = jk(a: [10, h, h, h], b: [h, h, h, h], handA: ['S13']);
+      expect(
+        jackarooMovesForCard(normal, 'A', 'S13').map((m) => m.kind).toSet(),
+        {'exit'},
+      );
+      final s = jk(
+        a: [30, h, h, h],
+        b: [73, h, h, h],
+        handA: ['S5'],
+        complex: true,
+      );
+      final moves = jackarooMovesForCard(s, 'A', 'S5');
+      expect(moves.where((m) => m.owner == 'B'), isEmpty);
+      expect(moves.where((m) => m.owner == 'A'), isNotEmpty);
+    });
+  });
+
+      test('forward steps pulse per square, team colors alternate clips', () {
       expect(
         jackarooStepSounds(3, colorIndex: 0),
         List.filled(3, 'jk_step1'),
