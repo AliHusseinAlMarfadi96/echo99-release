@@ -934,6 +934,15 @@ void main() {
       expect(plan[2].startMs - plan[1].startMs, 250);
     });
 
+    test('a long clip never delays the next scheduled sound', () {
+      // jk_burn_cards is 60.8s on disk (0.7s audible + silent tail). Each
+      // clip fires on its own AudioPlayer (SoundBoard._fire), so scheduling
+      // by the audible length is what orders the next clip's start.
+      final plan = planSequence(['jk_burn_cards', 'jk_kill']);
+      expect(plan[1].startMs, soundDurationsMs['jk_burn_cards']! + 40);
+      expect(sequenceLengthMs(plan), lessThan(2000));
+    });
+
     test('durations table matches the shipped clips (audio audit)', () {
       // Measured with ffprobe from assets/sounds: jk_burn_cards carries 0.7s
       // of audio plus a 60s silent tail in the user's supplied clip;
