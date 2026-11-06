@@ -1,2 +1,2 @@
-// Public entry point retained for existing screen imports.
-export 'table_screen_impl.dart';
+// Public entry point; implementation lives beside this file.
+export 'table_screen_events.dart';
