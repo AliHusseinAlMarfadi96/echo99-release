@@ -193,7 +193,7 @@ class TableRepository {
         .map(
           (snap) => [for (final doc in snap.docs) TableLogEntry.fromDoc(doc)],
       //   ).handleError((_) {})
- ).handleError((_) {});;;  
+ ).handleError((_) {});
 }
 
   Future<String?> appendLog({
