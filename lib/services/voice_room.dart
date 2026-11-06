@@ -5,13 +5,15 @@ import 'package:livekit_client/livekit_client.dart';
 import 'package:permission_handler/permission_handler.dart';
 
 import '../livekit_token.dart';
+import 'audio_policy.dart';
 
 /// Twitter Spaces-style voice: join as Listener (mic OFF). Mic is toggled
-/// explicitly. When mic is off, no local audio is published — screen-recording
-/// friendly.
+/// explicitly. Screen-recording audio support still requires device testing.
 ///
 /// Host mute (`Seat.micMuted` / board mutedMics): local unmute is blocked and
 /// remote audio tracks for that identity stay disabled until the host clears.
+enum VoiceLinkState { disconnected, listener, speaking, speakingMuted }
+
 class VoiceRoom {
   /// Secure server-issued voice tokens: prepared, off by default.
   ///
@@ -22,8 +24,9 @@ class VoiceRoom {
   /// mode deliberately has NO fallback to the bundled LIVEKIT_API_SECRET
   /// path: that legacy path ships the signing secret inside every installed
   /// APK and is kept only until server mode ships, then deleted.
-  static const bool _useServerTokens =
-      bool.fromEnvironment('VOICE_TOKEN_SERVER');
+  static const bool _useServerTokens = bool.fromEnvironment(
+    'VOICE_TOKEN_SERVER',
+  );
 
   /// Injected server token callable (room name in, signed token out).
   /// Unbound until server mode is activated; server joins fail closed.
@@ -33,6 +36,7 @@ class VoiceRoom {
   Future<void> joinConversation() async {
     inConversation = true;
   }
+
   Future<void> leaveConversation() async {
     inConversation = false;
   }
@@ -40,6 +44,7 @@ class VoiceRoom {
   Room? _room;
   String? _tableId;
   EventsListener<RoomEvent>? _events;
+  int _micRequest = 0;
   bool micOn = false;
   bool sharingAudio = false;
   void Function()? onPeerLost;
@@ -59,18 +64,25 @@ class VoiceRoom {
   bool get hostMutedLocal =>
       _identity != null && _hostMuted.contains(_identity);
 
-  static const unconfigured =
-      'الصوت غير مهيأ. مرّر LIVEKIT_API_SECRET عند البناء.';
+  static const unconfigured = 'خدمة الصوت غير مهيأة حالياً.';
 
   static const serverUnconfigured = 'الصوت غير متاح حالياً.';
 
   static const hostMutedError = 'المضيف كتم ميكروفونك';
 
-  Future<String?> _connect({
+  @protected
+  Future<String?> connectVoice({
     required String identity,
     required String displayName,
     required String tableId,
   }) async {
+    _identity = identity;
+    if (_room != null &&
+        _tableId == tableId &&
+        _room!.connectionState == ConnectionState.connected) {
+      await _applyRemoteMutes();
+      return null;
+    }
     String? token;
     if (_useServerTokens) {
       final call = serverTokenCall;
@@ -92,13 +104,6 @@ class VoiceRoom {
     if (token == null) {
       return unconfigured;
     }
-    _identity = identity;
-    if (_room != null &&
-        _tableId == tableId &&
-        _room!.connectionState == ConnectionState.connected) {
-      await _applyRemoteMutes();
-      return null;
-    }
     await _room?.disconnect();
     await _room?.dispose();
     final room = Room();
@@ -108,6 +113,8 @@ class VoiceRoom {
     // Listener by default: never auto-publish the microphone.
     await room.localParticipant?.setMicrophoneEnabled(false);
     micOn = false;
+    GameAudioPolicy.shared.captureRequested = false;
+    _serverMuted = !(room.localParticipant?.permissions.canPublish ?? false);
     _watch(room);
     await _applyRemoteMutes();
     return null;
@@ -135,10 +142,9 @@ class VoiceRoom {
         if (muted != _serverMuted) {
           _serverMuted = muted;
           if (muted && micOn) {
-            unawaited(
-              _room?.localParticipant?.setMicrophoneEnabled(false),
-            );
+            unawaited(_room?.localParticipant?.setMicrophoneEnabled(false));
             micOn = false;
+            GameAudioPolicy.shared.captureRequested = false;
           }
         }
       });
@@ -152,6 +158,7 @@ class VoiceRoom {
     if (hostMutedLocal && micOn) {
       await _room?.localParticipant?.setMicrophoneEnabled(false);
       micOn = false;
+      GameAudioPolicy.shared.captureRequested = false;
     }
     await _applyRemoteMutes();
   }
@@ -178,25 +185,95 @@ class VoiceRoom {
     required String identity,
     required String displayName,
   }) {
-    return _connect(
+    return connectVoice(
       identity: identity,
       displayName: displayName,
       tableId: 'echo99lobby',
     );
   }
 
-  /// Join a table voice room as Listener (mic OFF). Safe for screen recording.
+  /// Listener first; auto-publishing requires a saved opt-in. OS permission
+  /// and both host flags and server grants are checked before publishing.
   Future<String?> joinAsListener({
     required String identity,
     required String displayName,
     required String tableId,
-  }) {
-    return _connect(
+    bool autoEnableMic = false,
+  }) async {
+    final request = _micRequest;
+    final error = await connectVoice(
+      identity: identity,
+      displayName: displayName,
+      tableId: tableId,
+    );
+    if (error != null) return error;
+    if (!autoEnableMic || request != _micRequest) return null;
+    return setMicrophone(
+      enabled: true,
       identity: identity,
       displayName: displayName,
       tableId: tableId,
     );
   }
+
+  @protected
+  bool get serverAllowsPublish =>
+      !_serverMuted &&
+      (_room?.localParticipant?.permissions.canPublish ?? false);
+
+  @protected
+  Future<bool> requestMicrophonePermission() async =>
+      kIsWeb || (await Permission.microphone.request()).isGranted;
+
+  @protected
+  Future<void> publishMicrophone(bool enabled) async {
+    final local = _room?.localParticipant;
+    if (local == null) throw StateError('Voice disconnected');
+    await local.setMicrophoneEnabled(enabled);
+  }
+
+  @protected
+  Future<void> removeMicrophonePublication() async {
+    final local = _room?.localParticipant;
+    final pub = local?.getTrackPublicationBySource(TrackSource.microphone);
+    if (pub != null) await local!.removePublishedTrack(pub.sid);
+  }
+
+  /// Unpublish the microphone, but stay in the same room and table.
+  /// Muting keeps the publication; this action removes it.
+  Future<String?> returnToListener() async {
+    _micRequest++;
+    try {
+      await publishMicrophone(false);
+      micOn = false;
+      GameAudioPolicy.shared.captureRequested = false;
+      await removeMicrophonePublication();
+      inConversation = false;
+      return null;
+    } catch (_) {
+      return 'تعذر الرجوع لوضع الاستماع.';
+    }
+  }
+
+  static VoiceLinkState resolveLinkState({
+    required bool connected,
+    required bool hasMicPublication,
+    required bool micOn,
+  }) {
+    if (!connected) return VoiceLinkState.disconnected;
+    if (!hasMicPublication) return VoiceLinkState.listener;
+    return micOn ? VoiceLinkState.speaking : VoiceLinkState.speakingMuted;
+  }
+
+  VoiceLinkState get linkState => resolveLinkState(
+    connected: connected,
+    hasMicPublication:
+        _room?.localParticipant?.getTrackPublicationBySource(
+          TrackSource.microphone,
+        ) !=
+        null,
+    micOn: micOn,
+  );
 
   Future<String?> setMicrophone({
     required bool enabled,
@@ -204,11 +281,12 @@ class VoiceRoom {
     required String displayName,
     required String tableId,
   }) async {
+    final request = ++_micRequest;
     try {
       if (enabled && (_hostMuted.contains(identity) || _serverMuted)) {
         return hostMutedError;
       }
-      final error = await _connect(
+      final error = await connectVoice(
         identity: identity,
         displayName: displayName,
         tableId: tableId,
@@ -216,14 +294,34 @@ class VoiceRoom {
       if (error != null) {
         return error;
       }
-      if (enabled && !kIsWeb) {
-        final status = await Permission.microphone.request();
-        if (!status.isGranted) {
-          return 'لم يُمنح إذن الميكروفون.';
-        }
+      if (enabled && (!serverAllowsPublish || _hostMuted.contains(identity))) {
+        return hostMutedError;
       }
-      await _room?.localParticipant?.setMicrophoneEnabled(enabled);
+      if (request != _micRequest) return 'أُلغي تشغيل الميكروفون.';
+      if (enabled && !await requestMicrophonePermission()) {
+        return 'لم يُمنح إذن الميكروفون.';
+      }
+      if (request != _micRequest) return 'أُلغي تشغيل الميكروفون.';
+      // Permission UI may have been open while the host/server muted us.
+      if (enabled && (!serverAllowsPublish || _hostMuted.contains(identity))) {
+        return hostMutedError;
+      }
+      final previousIntent = GameAudioPolicy.shared.captureRequested;
+      GameAudioPolicy.shared.captureRequested = enabled;
+      try {
+        await publishMicrophone(enabled);
+      } catch (_) {
+        GameAudioPolicy.shared.captureRequested = previousIntent;
+        rethrow;
+      }
+      if (request != _micRequest) {
+        await publishMicrophone(false);
+        GameAudioPolicy.shared.captureRequested = false;
+        micOn = false;
+        return 'أُلغي تشغيل الميكروفون.';
+      }
       micOn = enabled;
+      if (enabled) inConversation = true;
       return null;
     } catch (_) {
       return 'تعذر الاتصال الصوتي.';
@@ -237,7 +335,7 @@ class VoiceRoom {
     required String tableId,
   }) async {
     try {
-      final error = await _connect(
+      final error = await connectVoice(
         identity: identity,
         displayName: displayName,
         tableId: tableId,
@@ -257,6 +355,8 @@ class VoiceRoom {
   }
 
   Future<void> close() async {
+    _micRequest++;
+    GameAudioPolicy.shared.captureRequested = false;
     onPeerLost = null;
     try {
       await _events?.dispose();
@@ -275,4 +375,3 @@ class VoiceRoom {
     sharingAudio = false;
   }
 }
-
