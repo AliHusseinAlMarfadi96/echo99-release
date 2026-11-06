@@ -27,7 +27,7 @@ void main() {
       expect(find.text('لعب الفرق'), findsOneWidget);
       expect(find.text('اللعب الفردي'), findsOneWidget);
       expect(
-        find.text('اثنان مقابل اثنين — الشريكان متقابلان'),
+        find.text('اثنان مقابل اثنين، الشريكان متقابلان'),
         findsOneWidget,
       );
       expect(find.text('كل لاعب لنفسه، ولا شريك لأحد'), findsOneWidget);
