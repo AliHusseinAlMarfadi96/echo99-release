@@ -353,6 +353,8 @@ JackarooStep? jackarooAdvance(
     sounds.add(kills.any((k) => friendly(k.$1)) ? 'jk_kill_own' : 'jk_kill');
   } else if (target >= jackarooTrack && start < jackarooTrack) {
     sounds.add('jk_safe_enter');
+  } else {
+    sounds.add('jk_marble_land');
   }
   return JackarooStep(next, sounds, '', kills);
 }
