@@ -713,7 +713,7 @@ String jackarooKillSuffix(MatchState state, List<(String, int)> kills) {
       parts.add('سيرجع $label إلى بيته');
     }
   }
-  return ' — ${parts.join('، ')}';
+  return '، ${parts.join('، ')}';
 }
 
 String jackarooMoveLabel(MatchState state, JackarooMove move) {
