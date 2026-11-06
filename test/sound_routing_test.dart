@@ -125,7 +125,8 @@ void main() {
     final after = play(before, 'H2');
     expect(after.players.first.points, 7);
     final clips = tableSounds(prev: before, next: after, me: 'a');
-    expect(clips, [pointLossSound]);
+    // Bust costs 2 points and (per PDF) redeals — penalty plus the deal.
+    expect(clips, [pointLossSound, 'deal']);
     expectNoEndGame(clips);
   });
 
