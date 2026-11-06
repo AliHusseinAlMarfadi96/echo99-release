@@ -2,14 +2,10 @@
 import json, os, plistlib, re, sys
 from pathlib import Path
 
-p = Path("pubspec.yaml")
-if p.exists(): p.write_text(re.sub(r"^version:\s*1\.\d+\.\d+\+?\d*", "version: 1.3.2+16", p.read_text("utf-8"), flags=re.M), "utf-8")
-
+# Version and packaging/session policy are source-owned. Do not rewrite them
+# as a hidden side effect of generating configuration.
 p = Path("assets/sounds/boot_unused.mp3")
 if p.exists(): p.unlink()
-
-p = Path("tool/package_adhoc_ipa.sh")
-if p.exists() and "CFBundleShortVersionString" not in p.read_text("utf-8"): p.write_text(p.read_text("utf-8").replace('app_plist["MinimumOSVersion"] = "14.0"', 'app_plist["MinimumOSVersion"] = "14.0"; app_plist["CFBundleShortVersionString"] = "1.3.2"; app_plist["CFBundleVersion"] = "16"'), "utf-8")
 
 p = Path("lib/main.dart")
 if p.exists() and "milliseconds: 2200" not in p.read_text("utf-8"): p.write_text(p.read_text("utf-8").replace("ok = await _reachServers().timeout(const Duration(seconds: 30));", "await Future<void>.delayed(const Duration(milliseconds: 2200)); ok = await _reachServers().timeout(const Duration(seconds: 30));"), "utf-8")
