@@ -2844,7 +2844,7 @@ class _GameSettingsDialogState extends State<_GameSettingsDialog> {
                     RadioListTile<bool>(
                       value: true,
                       title: Text('لعب الفرق'),
-                      subtitle: Text('اثنان مقابل اثنين — الشريكان متقابلان'),
+                      subtitle: Text('اثنان مقابل اثنين، الشريكان متقابلان'),
                     ),
                     RadioListTile<bool>(
                       value: false,
