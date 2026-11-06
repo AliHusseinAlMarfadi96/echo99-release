@@ -35,6 +35,7 @@ jobs:
           rm -f tool/livekit.defines.json
           bash tool/package_adhoc_ipa.sh build/ios/iphoneos/Runner.app Echo99.ipa
       - name: Upload IPA to Release v1.2.0
+        if: github.ref == 'refs/heads/main'
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh release upload v1.2.0 Echo99.ipa --clobber
