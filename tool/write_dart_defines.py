@@ -25,11 +25,7 @@ if p.exists() and "setIosAudioCategory" not in p.read_text("utf-8"): p.write_tex
 p = Path("ios/Runner/AppDelegate.swift")
 if p.exists() and "AVAudioSession" not in p.read_text("utf-8"): p.write_text("import AVFoundation\n" + p.read_text("utf-8").replace("GeneratedPluginRegistrant.register(with: self)", "do { try AVAudioSession.sharedInstance().setCategory(.playback, mode: .default, options: [.mixWithOthers]); try AVAudioSession.sharedInstance().setActive(true) } catch {}; GeneratedPluginRegistrant.register(with: self)", 1), "utf-8")
 
-p = Path("lib/game/jackaroo.dart")
-if p.exists(): p.write_text(p.read_text("utf-8").replace("if (rank == 6 && jackarooSixChain(state) >= 2)", "if (false && rank == 6 && jackarooSixChain(state) >= 2)").replace("if (rank == 1 || rank == 13 || rank == 6)", "if (rank == 1 || rank == 13)").replace("final isSix = rank == 6", "final isSix = false && rank == 6").replace("for (final steps in _forwardSteps(rank))", "for (final steps in (rank == 13 && !board.complex ? const <int>[] : _forwardSteps(rank)))"), "utf-8")
 
-p = Path("lib/screens/table_screen.dart")
-if p.exists(): p.write_text(p.read_text("utf-8").replace("moves.length == 1 && rank != 6", "moves.length == 1"), "utf-8")
 
 p = Path("lib/services/table_repository.dart")
 if p.exists(): p.write_text(p.read_text("utf-8").replace(";;", ";"), "utf-8")
