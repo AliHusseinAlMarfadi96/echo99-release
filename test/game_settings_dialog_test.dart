@@ -40,7 +40,36 @@ void main() {
 
     });
 
-testWidgets('hidden when the table is not 4-player jackaroo', (
+testWidgets('timer field is enabled, editable, and holds its value', (
+      tester,
+    ) async {
+      await tester.pumpWidget(
+        _wrap(
+          buildGameSettingsDialogForTest(
+            showMode: true,
+            initialMode: jackarooStandard,
+            initialTimer: 30,
+            showTeams: true,
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      final field = tester.widget<TextField>(find.byType(TextField));
+      expect(field.controller!.text, '30');
+      expect(field.enabled, isNot(false));
+      await tester.enterText(find.byType(TextField), '45');
+      expect(field.controller!.text, '45');
+      // The text-field flag merges onto the EditableText descendant node.
+      final semantics = tester.getSemantics(
+        find.descendant(
+          of: find.byType(TextField),
+          matching: find.byType(EditableText),
+        ),
+      );
+      expect(semantics.getSemanticsData().flagsCollection.isTextField, isTrue);
+    });
+
+    testWidgets('hidden when the table is not 4-player jackaroo', (
       tester,
     ) async {
       await tester.pumpWidget(
