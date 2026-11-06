@@ -178,6 +178,10 @@ void main() {
     expect(bust.state.pile, 0);
     expect(bust.state.cue!.type, 'glass');
     expect(bust.state.cue!.also, ['ordinary', 'penalty']);
+    // PDF: busting past 99 ends the round — survivors are redealt 3 cards.
+    expect(bust.state.lastPlay!.redealt, isTrue);
+    expect(bust.state.hands['a']!.length, 3);
+    expect(bust.state.hands['b']!.length, 3);
   });
 
   test('exact 99 redeals survivors and clashes', () {
@@ -205,7 +209,7 @@ void main() {
     expect(result.state.lastPlay!.redealt, isTrue);
     expect(result.state.players[0].points, 10);
     expect(result.state.players[1].points, 8);
-    expect(result.state.hands['a']!.length, 4);
+    expect(result.state.hands['a']!.length, 3);
     expect(
       playSpeech(
         'علي',
