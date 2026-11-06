@@ -1,7 +1,7 @@
 {
   "name": "echo99-functions",
   "private": true,
-  "description": "Server-side cleanup for abandoned Echo99 tables.",
+  "description": "Server-side cleanup for abandoned Echo99 tables and the LiveKit voice token endpoint.",
   "engines": {
     "node": "22"
   },
@@ -11,6 +11,7 @@
   },
   "dependencies": {
     "firebase-admin": "^13.5.0",
-    "firebase-functions": "^6.4.0"
+    "firebase-functions": "^6.4.0",
+    "livekit-server-sdk": "^2.9.0"
   }
 }
