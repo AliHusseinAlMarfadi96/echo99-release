@@ -620,6 +620,30 @@ void main() {
       expect(label, isNot(contains('يصبح خلفك')));
     });
 
+    test('exit option reports start-square neighbours', () {
+      const h = jackarooHome;
+      // B stone at abs 3 (progress 60, base 19): A exits to abs 0.
+      final s = jk(a: [h, h, h, h], b: [60, h, h, h], handA: ['S1']);
+      final move = jackarooMovesForCard(s, 'A', 'S1')
+          .firstWhere((m) => m.kind == 'exit');
+      final label = jackarooMoveLabel(s, move);
+      expect(label, contains('إلى البداية'));
+      expect(label, contains('يصبح أمامك'));
+      expect(label, contains('على بُعد 3'));
+    });
+
+    test('context wraps across the track end and start', () {
+      const h = jackarooHome;
+      // A at progress 72 (abs 72), B at abs 2 (progress 59): walking 2 to
+      // abs 74 leaves B 4 ahead across the 75/0 boundary.
+      final s = jk(a: [72, h, h, h], b: [59, h, h, h], handA: ['S2']);
+      final move = jackarooMovesForCard(s, 'A', 'S2')
+          .firstWhere((m) => m.kind == 'forward');
+      final label = jackarooMoveLabel(s, move);
+      expect(label, contains('يصبح أمامك'));
+      expect(label, contains('على بُعد 4'));
+    });
+
     test('seven split names the ordered steps', () {
       const h = jackarooHome;
       final s = jk(a: [10, 20, h, h], b: [h, h, h, h], handA: ['S7']);
