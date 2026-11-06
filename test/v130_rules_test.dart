@@ -477,7 +477,85 @@ void main() {
       );
     });
 
-    test('normal king walk is not offered; complex 5 cannot home an enemy', () {
+    MatchState jk4({required int dealRound, required int deckSize, int dealer = 0}) {
+      var state = newWaitingTable(
+        id: 't',
+        name: 'طاولة',
+        hostId: 'A',
+        hostName: 'A',
+        settings: const TableSettings(startPoints: 10, timerSeconds: 0),
+        game: gameJackaroo,
+      );
+      for (final id in ['B', 'C', 'D']) {
+        state = addBot(state, id, id).state;
+      }
+      return MatchState.fromMap({
+        ...state.toMap(),
+        'status': 'playing',
+        'turnIndex': 0,
+        'hands': {
+          'A': ['S6'],
+          'B': <String>[],
+          'C': <String>[],
+          'D': <String>[],
+        },
+        'deck': List.filled(deckSize, 'C2'),
+        'board': {
+          'mode': jackarooStandard,
+          'colors': {'A': 0, 'B': 1, 'C': 2, 'D': 3},
+          'pieces': {
+            'A': [jackarooHome, jackarooHome, jackarooHome, jackarooHome],
+            'B': [jackarooHome, jackarooHome, jackarooHome, jackarooHome],
+            'C': [jackarooHome, jackarooHome, jackarooHome, jackarooHome],
+            'D': [jackarooHome, jackarooHome, jackarooHome, jackarooHome],
+          },
+          'sixChain': 0,
+          'dealer': dealer,
+          'dealRound': dealRound,
+        },
+      }, 't');
+    }
+
+    EngineResult burnLastCard(MatchState s) {
+      final moves = jackarooLegalMoves(s, 'A');
+      expect(moves.single.kind, 'burnAll');
+      return playJackaroo(
+        s,
+        playerId: 'A',
+        move: moves.single,
+        random: Random(1),
+        nowMillis: 1,
+      );
+    }
+
+    test('4-player deal cycle: 4, then 4, then 5; dealer rotates on reshuffle', () {
+      // Round 2 of the cycle: 4 cards each, dealer unchanged.
+      final r2 = burnLastCard(jk4(dealRound: 1, deckSize: 36)).state;
+      for (final id in ['A', 'B', 'C', 'D']) {
+        expect(r2.hands[id]!.length, 4, reason: 'round 2 deals 4');
+      }
+      expect(r2.deck.length, 20);
+      expect(r2.board['dealRound'], 2);
+      expect(r2.board['dealer'], 0);
+      expect(r2.current!.id, 'B', reason: 'seat after the dealer starts');
+
+      // Round 3 of the cycle: 5 cards each, emptying the 52-card deck.
+      final r3 = burnLastCard(jk4(dealRound: 2, deckSize: 20)).state;
+      expect(r3.hands['A']!.length, 5, reason: 'round 3 deals 5');
+      expect(r3.deck, isEmpty);
+      expect(r3.board['dealRound'], 3);
+      expect(r3.board['dealer'], 0);
+
+      // Deck exhausted: reshuffle and the deal passes to the next seat.
+      final r4 = burnLastCard(jk4(dealRound: 3, deckSize: 0)).state;
+      expect(r4.hands['A']!.length, 4);
+      expect(r4.board['dealRound'], 1);
+      expect(r4.board['dealer'], 1, reason: 'deal rotates after reshuffle');
+      expect(r4.current!.id, 'C', reason: 'seat after the new dealer');
+      expect(r4.cue!.also, contains('jk_reshuffle'));
+    });
+
+        test('normal king walk is not offered; complex 5 cannot home an enemy', () {
       const h = jackarooHome;
       final normal = jk(a: [10, h, h, h], b: [h, h, h, h], handA: ['S13']);
       expect(
