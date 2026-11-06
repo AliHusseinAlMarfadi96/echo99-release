@@ -466,12 +466,13 @@ class TableRepository {
     required String hostId,
     required String mode,
     required int timerSeconds,
+    bool? teams,
   }) {
     return _mutate(tableId, (state) {
       if (state.hostId != hostId) {
         return const _Err('فقط المضيف يستطيع تغيير الإعدادات');
       }
-      return _from(applyJackarooMode(state, mode, timerSeconds));
+      return _from(applyJackarooMode(state, mode, timerSeconds, teams: teams));
     });
   }
 
