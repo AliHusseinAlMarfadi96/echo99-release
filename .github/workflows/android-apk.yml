@@ -29,8 +29,8 @@ jobs:
         run: |
           set -euo pipefail
           if [ -z "${ANDROID_DEBUG_KEYSTORE_B64:-}" ]; then
-            echo "Missing ANDROID_DEBUG_KEYSTORE_B64. Refusing to sign with a different debug key." >&2
-          mkdir -p "$HOME/.android" && rm -f "$HOME/.android/debug.keystore" && keytool -genkeypair -v -keystore "$HOME/.android/debug.keystore" -storepass android -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Android Debug,O=Android,C=US" && exit 0
+            echo "Missing ANDROID_DEBUG_KEYSTORE_B64. Refusing to sign with a random key: every APK must carry the stable keystore so installs update and Google sign-in keeps working." >&2
+            exit 1
           fi
           mkdir -p "$HOME/.android"
           printf '%s' "$ANDROID_DEBUG_KEYSTORE_B64" | base64 -d > "$HOME/.android/debug.keystore"
@@ -56,7 +56,7 @@ jobs:
             echo "Unexpected APK signing certificate SHA-1." >&2
             echo "Expected: $EXPECTED_DIGEST" >&2
             echo "Actual:   ${DIGEST:-<empty>}" >&2
-            true
+            exit 1
           fi
       - name: Upload APK to Release v1.2.0
         if: github.ref == 'refs/heads/main'
