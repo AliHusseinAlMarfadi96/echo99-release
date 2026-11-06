@@ -137,7 +137,11 @@ const { AccessToken } = require("livekit-server-sdk");
 const livekitApiSecret = defineSecret("LIVEKIT_API_SECRET");
 // Public coordinates, safe in source (same values the client already ships).
 const LIVEKIT_API_KEY = "APIKw29rPMTjQSy";
-const TOKEN_TTL_SECONDS = 6 * 60 * 60; // matches the old client-side tokens
+// Short bounded TTL: grants (including host mutes) are static for a
+// token's lifetime, so muting someone must not wait hours. Ten minutes
+// bounds a stale publish grant; clients refresh at 80% of TTL, and the
+// server re-reads the seat flags on every call.
+const TOKEN_TTL_SECONDS = 10 * 60;
 
 exports.mintVoiceToken = onCall(
   { secrets: [livekitApiSecret] },
