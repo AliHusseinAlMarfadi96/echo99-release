@@ -385,6 +385,46 @@ void main() {
       }, 't');
     }
 
+    MatchState jk4p({
+      required List<int> a,
+      required List<int> b,
+      required List<int> c,
+      required List<int> d,
+      required List<String> handA,
+      bool complex = false,
+      bool teams = true,
+    }) {
+      var state = newWaitingTable(
+        id: 't',
+        name: 'طاولة',
+        hostId: 'A',
+        hostName: 'A',
+        settings: const TableSettings(startPoints: 10, timerSeconds: 0),
+        game: gameJackaroo,
+      );
+      for (final id in ['B', 'C', 'D']) {
+        state = addBot(state, id, id).state;
+      }
+      state = applyJackarooMode(
+        state,
+        complex ? jackarooComplex : jackarooStandard,
+        0,
+      ).state;
+      state = startGame(state, Random(2), 0).state;
+      return MatchState.fromMap({
+        ...state.toMap(),
+        'turnIndex': 0,
+        'hands': {'A': handA},
+        'board': {
+          'mode': complex ? jackarooComplex : jackarooStandard,
+          'teams': teams,
+          'colors': {'A': 0, 'B': 1, 'C': 2, 'D': 3},
+          'pieces': {'A': a, 'B': b, 'C': c, 'D': d},
+          'sixChain': 0,
+        },
+      }, 't');
+    }
+
     test('blocked on track: burn one chosen card, not the whole hand', () {
       const h = jackarooHome;
       // A's only track piece sits at 75; a 6 overshoots the safe lane end.
@@ -642,6 +682,28 @@ void main() {
       final label = jackarooMoveLabel(s, move);
       expect(label, contains('يصبح أمامك'));
       expect(label, contains('على بُعد 4'));
+    });
+
+    test('partner capture keeps both the warning and the context', () {
+      const h = jackarooHome;
+      // 4-player team game: C is A's partner (base 38). C stone at abs 12
+      // (progress 50); A walks 2 from 10 onto it, then hears the partner
+      // warning and who is left ahead/behind.
+      final s = jk4p(
+        a: [10, h, h, h],
+        b: [20, h, h, h],
+        c: [50, h, h, h],
+        d: [h, h, h, h],
+        handA: ['S2'],
+      );
+      final move = jackarooMovesForCard(s, 'A', 'S2')
+          .firstWhere((m) => m.kind == 'forward');
+      final label = jackarooMoveLabel(s, move);
+      expect(label, contains('تنبيه'));
+      expect(label, contains('شريكك'));
+      expect(label, contains('يصبح أمامك'));
+      // B stone: progress 20, base 19, abs 39; A lands on abs 12.
+      expect(label, contains('على بُعد 27'));
     });
 
     test('seven split names the ordered steps', () {
