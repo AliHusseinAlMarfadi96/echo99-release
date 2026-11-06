@@ -687,18 +687,27 @@ EngineResult startJackaroo(MatchState state, Random random, int nowMillis) {
       winnerId: null,
       nonce: nonce,
       turnStartedAt: nowMillis,
-      board: {...board.toMap(), 'text': 'بدأت Jackaroo'},
+      board: {
+        ...board.toMap(),
+        'dealer': host,
+        'dealRound': 1,
+        'text': 'بدأت Jackaroo',
+      },
     ),
   );
 }
 
 const jackarooCountError = 'Jackaroo من 2 إلى 4 لاعبين';
 
-Map<String, List<String>> _dealJackaroo(List<Seat> players, List<String> deck) {
+Map<String, List<String>> _dealJackaroo(
+  List<Seat> players,
+  List<String> deck, [
+  int cards = jackarooHandSize,
+]) {
   final hands = <String, List<String>>{
     for (final seat in players) seat.id: <String>[],
   };
-  for (var round = 0; round < jackarooHandSize; round++) {
+  for (var round = 0; round < cards; round++) {
     for (final seat in players) {
       if (deck.isNotEmpty) {
         hands[seat.id]!.add(deck.removeAt(0));
@@ -820,6 +829,8 @@ EngineResult playJackaroo(
   final boardMap = <String, dynamic>{
     ...board.toMap(),
     'sixChain': 0,
+    'dealer': (state.board['dealer'] as num?)?.toInt() ?? 0,
+    'dealRound': (state.board['dealRound'] as num?)?.toInt() ?? 1,
     'text': text,
   };
   if (move.kind == 'burnNext') {
@@ -865,17 +876,31 @@ EngineResult playJackaroo(
     }
   }
   if (!found) {
-    if (deck.length < state.players.length * jackarooHandSize) {
+    final count = state.players.length;
+    var dealer = (state.board['dealer'] as num?)?.toInt() ?? 0;
+    var dealRound = (state.board['dealRound'] as num?)?.toInt() ?? 1;
+    dealRound += 1;
+    // Rules PDF: 4 players are dealt 4, then 4, then 5 (13 each = the full
+    // 52). With 2 or 3 players every deal is 4 cards.
+    var dealSize = count == 4 && dealRound == 3 ? 5 : jackarooHandSize;
+    if (deck.length < count * dealSize) {
       deck = shuffledDeck(random);
       discard.clear();
       unique.add('jk_reshuffle');
+      // When the deck runs out the deal passes to the next seat (rules PDF).
+      dealer = (dealer + 1) % count;
+      dealRound = 1;
+      dealSize = jackarooHandSize;
     }
-    final dealt = _dealJackaroo(state.players, deck);
+    final dealt = _dealJackaroo(state.players, deck, dealSize);
     hands
       ..clear()
       ..addAll(dealt);
     unique.add('jk_deal_cards');
-    next = (state.turnIndex + 1) % state.players.length;
+    // The seat after the dealer plays first after every deal.
+    next = (dealer + 1) % count;
+    boardMap['dealer'] = dealer;
+    boardMap['dealRound'] = dealRound;
   }
   return EngineResult(
     state.copyWith(
