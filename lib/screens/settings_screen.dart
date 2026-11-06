@@ -50,6 +50,24 @@ class _SettingsScreenState extends State<SettingsScreen> {
           const SizedBox(height: 12),
           SwitchListTile(
             contentPadding: EdgeInsets.zero,
+            title: const Text('تشغيل الميكروفون تلقائياً عند دخول الطاولة'),
+            subtitle: const Text('متوقف افتراضياً. عند تفعيله يبدأ بث صوتك بعد منح إذن الميكروفون، ما لم يكتمك المضيف.'),
+            value: settings.autoMicOnJoin,
+            onChanged: (value) async {
+              try {
+                await settings.setAutoMicOnJoin(value);
+                if (mounted) setState(() {});
+              } catch (_) {
+                if (context.mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text('تعذر حفظ إعداد الميكروفون.')),
+                  );
+                }
+              }
+            },
+          ),
+          SwitchListTile(
+            contentPadding: EdgeInsets.zero,
             title: const Text('إعلان اللعبات'),
             value: settings.speakPlays,
             onChanged: (value) {
@@ -60,7 +78,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             contentPadding: EdgeInsets.zero,
             title: const Text('استخدام الناطق الداخلي'),
             subtitle: const Text(
-              'افتراضياً متوقف — يعتمد التطبيق على TalkBack / VoiceOver',
+              'افتراضياً متوقف - يعتمد التطبيق على TalkBack / VoiceOver',
             ),
             value: settings.useInternalTts,
             onChanged: (value) {
