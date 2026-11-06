@@ -223,7 +223,12 @@ EngineResult startGame(MatchState state, Random random, int nowMillis) {
 }
 
 /// Host picks the Jackaroo mode in the بدء dialog.
-EngineResult applyJackarooMode(MatchState state, String mode, int timer) {
+EngineResult applyJackarooMode(
+  MatchState state,
+  String mode,
+  int timer, {
+  bool? teams,
+}) {
   if (state.status != 'waiting') {
     return EngineResult(state, 'لا يمكن تغيير الإعدادات بعد البدء');
   }
@@ -233,6 +238,9 @@ EngineResult applyJackarooMode(MatchState state, String mode, int timer) {
       board: {
         ...state.board,
         'mode': mode == jackarooComplex ? jackarooComplex : jackarooStandard,
+        // Host's 4-player choice: teams (شركاء) vs individual. Omitted keeps
+        // the previous setting.
+        'teams': ?teams,
       },
       nonce: state.nonce + 1,
     ),
