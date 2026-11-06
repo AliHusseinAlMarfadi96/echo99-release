@@ -1,9 +1,8 @@
 import 'dart:async';
 
-import 'package:audioplayers/audioplayers.dart';
+import 'sound_player.dart';
 
 import 'sound_durations.dart';
-import 'audio_policy.dart';
 
 /// One clip in a planned, non-overlapping sequence.
 class ScheduledClip {
@@ -51,20 +50,23 @@ int sequenceLengthMs(List<ScheduledClip> plan) {
 }
 
 class SoundBoard {
-  SoundBoard({GameAudioPolicy? audioPolicy})
-    : _audioPolicy = audioPolicy ?? GameAudioPolicy.shared;
-  final GameAudioPolicy _audioPolicy;
-
-  // Source-owned policy, not injected at build time. On iOS every player's
-  // audio context is global; never force playback while RTC input is active.
-  Future<void> _initCtx() async {
-    await AudioPlayer.global.setAudioContext(_audioPolicy.soundContext);
+  SoundBoard({SoundPlayer Function()? playerFactory, int Function()? nowMillis})
+    : _playerFactory = playerFactory ?? ManagedSoundPlayer.new,
+      _nowMillis = nowMillis ?? (() => DateTime.now().millisecondsSinceEpoch) {
+    _a = _playerFactory();
+    _b = _playerFactory();
+    _loop = _playerFactory();
   }
+  final SoundPlayer Function() _playerFactory;
+  final int Function() _nowMillis;
+  late final SoundPlayer _a;
+  late final SoundPlayer _b;
+  late final SoundPlayer _loop;
 
-  final AudioPlayer _a = AudioPlayer();
-  final AudioPlayer _b = AudioPlayer();
-  final AudioPlayer _loop = AudioPlayer();
-  final List<AudioPlayer> _layers = [];
+  // Sentinel retained so the legacy build script cannot inject playback-only
+  // AudioContext writes. Session ownership is in sound_player.dart now.
+  Future<void> _initCtx() async {}
+  final List<SoundPlayer> _layers = [];
   var _flip = false;
   var _disposed = false;
 
@@ -86,11 +88,9 @@ class SoundBoard {
       return;
     }
     try {
-      await _loop.setReleaseMode(ReleaseMode.loop);
-      await _loop.setVolume(1);
       await _loop.stop();
       await _initCtx();
-      await _loop.play(AssetSource(_asset(name)), volume: 1.0);
+      await _loop.playAsset(_asset(name), loop: true);
     } catch (_) {}
   }
 
@@ -110,7 +110,7 @@ class SoundBoard {
     try {
       await player.stop();
       await _initCtx();
-      await player.play(AssetSource(_asset(name)), volume: 1.0);
+      await player.playAsset(_asset(name));
     } catch (_) {}
   }
 
@@ -119,16 +119,19 @@ class SoundBoard {
 
   Future<void> _fire(String name) async {
     if (_disposed) return;
-    final player = AudioPlayer();
+    final player = _playerFactory();
     _layers.add(player);
-    player.onPlayerComplete.listen((_) {
+    player.completed.listen((_) {
       _layers.remove(player);
       unawaited(player.dispose());
     });
     try {
       await _initCtx();
-      await player.play(AssetSource(_asset(name)), volume: 1.0);
-    } catch (_) {}
+      await player.playAsset(_asset(name));
+    } catch (_) {
+      _layers.remove(player);
+      await player.dispose();
+    }
   }
 
   /// Plays clips one after another without overlap (see [planSequence]).
@@ -144,16 +147,15 @@ class SoundBoard {
     if (plan.isEmpty) {
       return Future<void>.value();
     }
-    final now = DateTime.now().millisecondsSinceEpoch;
+    final now = _nowMillis();
     // Keep the current chain intact. Resetting it while a long clip is
     // still running allowed later sequences to overlap that clip.
     final length = sequenceLengthMs(plan);
     _queuedUntil = (_queuedUntil > now ? _queuedUntil : now) + length + 60;
     final run = _queue.then((_) async {
-      final start = DateTime.now().millisecondsSinceEpoch;
+      final start = _nowMillis();
       for (final clip in plan) {
-        final wait =
-            start + clip.startMs - DateTime.now().millisecondsSinceEpoch;
+        final wait = start + clip.startMs - _nowMillis();
         if (wait > 0) {
           await Future<void>.delayed(Duration(milliseconds: wait));
         }
@@ -164,7 +166,7 @@ class SoundBoard {
           start +
           last.startMs +
           (soundDurationsMs[last.name] ?? 0) -
-          DateTime.now().millisecondsSinceEpoch;
+          _nowMillis();
       if (tail > 0) {
         await Future<void>.delayed(Duration(milliseconds: tail + 40));
       }
