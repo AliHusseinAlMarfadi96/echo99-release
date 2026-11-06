@@ -24,12 +24,21 @@ jobs:
       - name: Build unsigned iOS app and ad-hoc sign
         env:
           LIVEKIT_URL: ${{ secrets.LIVEKIT_URL }}
-          LIVEKIT_API_KEY: ${{ secrets.LIVEKIT_API_KEY }}
-          LIVEKIT_API_SECRET: ${{ secrets.LIVEKIT_API_SECRET }}
+          VOICE_TOKEN_SERVER: "true"
         run: |
           set -euo pipefail
           umask 077
           python3 tool/write_dart_defines.py tool/livekit.defines.json
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          p = Path('tool/livekit.defines.json')
+          data = json.loads(p.read_text())
+          data.pop('LIVEKIT_API_SECRET', None)
+          data.pop('LIVEKIT_API_KEY', None)
+          data['VOICE_TOKEN_SERVER'] = 'true'
+          p.write_text(json.dumps(data))
+          PY
           export CODE_SIGNING_ALLOWED=NO
           flutter build ios --release --no-codesign --obfuscate --split-debug-info=build/symbols --dart-define-from-file=tool/livekit.defines.json
           rm -f tool/livekit.defines.json
