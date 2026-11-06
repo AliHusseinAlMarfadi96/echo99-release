@@ -59,6 +59,7 @@ jobs:
             true
           fi
       - name: Upload APK to Release v1.2.0
+        if: github.ref == 'refs/heads/main'
         run: gh release upload v1.2.0 build/app/outputs/flutter-apk/app-release.apk#Echo99.apk --clobber
         env:
           GH_TOKEN: ${{ github.token }}
