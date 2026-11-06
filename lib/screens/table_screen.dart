@@ -1138,9 +1138,7 @@ class _TableScreenState extends State<TableScreen> with WidgetsBindingObserver {
     }
     JackarooMove? pick;
     final rank = PlayingCard.parse(code)?.rank;
-    // A 6 never auto-moves: the popup lists every eligible piece,
-    // including pieces still in base.
-    if (moves.length == 1 && rank != 6) {
+    if (moves.length == 1) {
       pick = moves.single;
     } else {
       pick = await showDialog<JackarooMove>(
@@ -2265,11 +2263,6 @@ class _TableScreenState extends State<TableScreen> with WidgetsBindingObserver {
                 const Padding(
                   padding: EdgeInsets.all(8),
                   child: Text('يجب حرق ورقة — اضغط أي ورقة لحرقها'),
-                ),
-              if (jackarooSixChain(state) > 0 && _myTurn())
-                const Padding(
-                  padding: EdgeInsets.all(8),
-                  child: Text('لعبت ستة: العب ورقة أخرى الآن'),
                 ),
               Wrap(
                 alignment: WrapAlignment.center,
