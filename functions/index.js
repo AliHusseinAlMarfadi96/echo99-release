@@ -289,8 +289,20 @@ exports.moderateVoiceParticipant = onCall(
 
     // Ordering: LiveKit first, Firestore second. If the LiveKit call fails
     // the table state is untouched. If the Firestore write fails after the
-    // room changed, roll the room back to the previous grant so the two
-    // never diverge, then surface the failure.
+    // room changed, attempt to roll the room grant back to the previous
+    // value and report the outcome honestly.
+    //
+    // Limits (deliberately unsupported, fail closed on ambiguity):
+    // - There is NO transaction across LiveKit and Firestore; this function
+    //   cannot make the two systems atomic.
+    // - Concurrent moderation of the same target (two host actions, or a
+    //   seat change racing a mute) is last-writer-wins per system and can
+    //   diverge if either system fails mid-sequence.
+    // - The rollback restores the grant observed BEFORE this call, which a
+    //   racing action may already have changed.
+    // Reconciliation in every ambiguous case: the host retries the action;
+    // each call writes the full grant set, so a retry converges both
+    // systems to the requested state.
     await svc.updateParticipant(tableId, targetId, {
       permission: grant(action === "unmute"),
     });
@@ -307,12 +319,21 @@ exports.moderateVoiceParticipant = onCall(
           permission: grant(!previousMuted),
         });
       } catch (rollbackError) {
+        // Partial failure: the room grant may show the new state while the
+        // table still shows the old one. Say so; never claim the room is
+        // unchanged or the systems agree.
         throw new HttpsError(
           "internal",
-          "Table write failed AND room rollback failed; host must retry the action.",
+          "Table write failed and room rollback also failed; the room " +
+            "grant and the table state may disagree. Retry the action to reconcile.",
         );
       }
-      throw new HttpsError("internal", "Table write failed; room unchanged.");
+      // Rollback call succeeded: the room grant was changed and then
+      // restored to its previous value. It did not stay "unchanged".
+      throw new HttpsError(
+        "internal",
+        "Table write failed; room grant restored to its previous value.",
+      );
     }
     return { ok: true };
   },
