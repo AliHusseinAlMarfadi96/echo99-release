@@ -255,3 +255,39 @@ int maxSeatsFor(String game) => switch (game) {
   gameThousandMiles => 9,
   _ => 10,
 };
+
+/// Spoken Arabic lines for seat changes, for blind-accessible join/leave
+/// announcements (sounds alone do not say WHO changed). Bot replacements
+/// announce only the human's departure, not the bot's arrival.
+List<String> seatChangeSpeechLines(
+  MatchState prev,
+  MatchState next,
+  String me,
+) {
+  final prevById = {for (final s in prev.players) s.id: s};
+  final nextById = {for (final s in next.players) s.id: s};
+  final lines = <String>[];
+  final removed = [
+    for (final s in prev.players)
+      if (!nextById.containsKey(s.id) && s.id != me) s,
+  ];
+  final botReplacements = <String>{};
+  for (final seat in next.players) {
+    if (prevById.containsKey(seat.id) || seat.id == me) {
+      continue;
+    }
+    // A bot taking a departed human's seat is covered by the departure line.
+    final replacedHuman = removed.any(
+      (r) => seat.isBot && seat.name == 'بوت (${r.name})',
+    );
+    if (replacedHuman) {
+      botReplacements.add(seat.id);
+      continue;
+    }
+    lines.add('انضم ${seat.name} إلى الطاولة');
+  }
+  for (final seat in removed) {
+    lines.add('غادر ${seat.name} الطاولة');
+  }
+  return lines;
+}
