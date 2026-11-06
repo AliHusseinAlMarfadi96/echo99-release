@@ -510,6 +510,11 @@ class _TableScreenState extends State<TableScreen> with WidgetsBindingObserver {
       }
     }
     if (prev != null) {
+      if (scope.settings.speakPlays) {
+        for (final line in seatChangeSpeechLines(prev, next, me)) {
+          _say(line);
+        }
+      }
       final prevIds = prev.players.map((seat) => seat.id).toSet();
       final nextIds = next.players.map((seat) => seat.id).toSet();
       if (prevIds.difference(nextIds).any((id) => id != me)) {
