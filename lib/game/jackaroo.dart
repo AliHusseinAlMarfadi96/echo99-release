@@ -753,6 +753,13 @@ String jackarooContextSuffix(MatchState state, JackarooMove move) {
       who = move.owner2;
       index = move.piece2;
       break;
+    case 'exit':
+      // The freed stone lands on its own start square, which still has
+      // track neighbours the player must hear about (rules text).
+      final next = board.clone();
+      next.pieces[move.owner]![move.piece] = 0;
+      after = next;
+      break;
     case 'swap':
       after = jackarooSwap(
         board,
@@ -829,7 +836,8 @@ String jackarooMoveLabel(MatchState state, JackarooMove move) {
   String piece(String who, int i) => jackarooPieceLabel(state, who, i);
   switch (move.kind) {
     case 'exit':
-      return '$cardName: إخراج ${piece(move.owner, move.piece)} إلى البداية';
+      return '$cardName: إخراج ${piece(move.owner, move.piece)} إلى البداية'
+          '${jackarooContextSuffix(state, move)}';
     case 'swap':
       return '$cardName: تبديل ${piece(move.owner, move.piece)} '
           '(${_where(board, move.owner, board.pieces[move.owner]![move.piece])}) '
