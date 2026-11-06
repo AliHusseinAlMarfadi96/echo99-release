@@ -272,6 +272,12 @@ JackarooStep? jackarooAdvance(
       continue;
     }
     if (hit.$1 == owner || board.colors[hit.$1] == myColor) {
+      // Complex king sweep returns EVERY stone on its path, including the
+      // player's own and the partner's (rules PDF, complex difference 3).
+      if (kingSweep) {
+        kills.add(hit);
+        continue;
+      }
       return null; // same color never passes or stacks
     }
     if (board.baseSafe(occ, abs)) {
@@ -539,6 +545,13 @@ List<JackarooMove> jackarooMovesForCard(
               ? const <int>[]
               : _forwardSteps(rank))) {
         final sweep = rank == 13 && board.complex;
+        // Complex 5: an enemy piece may be pushed along the track but never
+        // into its own safe home (rules PDF) — such moves are not offered.
+        if (who != owner &&
+            list[i] != jackarooHome &&
+            list[i] + steps >= jackarooTrack) {
+          continue;
+        }
         if (jackarooAdvance(board, who, i, steps, kingSweep: sweep) != null) {
           moves.add(
             JackarooMove(
@@ -553,7 +566,13 @@ List<JackarooMove> jackarooMovesForCard(
       }
     }
   }
-  if (rank == 10 && board.complex && state.players.length > 1) {
+  // Complex 10: forcing the next player to burn is only offered when some
+  // other player still holds cards; otherwise it is a plain 10 (rules PDF).
+  if (rank == 10 &&
+      board.complex &&
+      state.players.any(
+        (s) => s.id != owner && (state.hands[s.id]?.isNotEmpty ?? false),
+      )) {
     moves.add(JackarooMove(card: card, kind: 'burnNext', owner: owner));
   }
   return moves;
@@ -573,7 +592,19 @@ List<JackarooMove> jackarooLegalMoves(MatchState state, String owner) {
     for (final card in hand) ...jackarooMovesForCard(state, owner, card),
   ];
   if (moves.isEmpty && hand.isNotEmpty) {
-    return [JackarooMove(card: hand.first, kind: 'burnAll', owner: owner)];
+    // Rules PDF: the whole hand burns only when every piece is still in base
+    // (no card can free you for the rest of this deal). With pieces on the
+    // track another player may open the path, so one chosen card burns and
+    // the turn passes.
+    final allInBase = (JackarooBoard.of(state).pieces[owner] ?? const <int>[])
+        .every((piece) => piece == jackarooHome);
+    if (allInBase) {
+      return [JackarooMove(card: hand.first, kind: 'burnAll', owner: owner)];
+    }
+    return [
+      for (final card in hand)
+        JackarooMove(card: card, kind: 'burn', owner: owner),
+    ];
   }
   return moves;
 }
@@ -601,6 +632,7 @@ String jackarooMoveLabel(MatchState state, JackarooMove move) {
     case 'burnAll':
       return 'لا توجد حركة — حرق جميع الأوراق';
     case 'burnForced':
+    case 'burn':
       return 'حرق $cardName';
     case 'sixForfeit':
       return '$cardName: ثالث ستة متتالية — يخسر الدور';
@@ -717,6 +749,7 @@ EngineResult playJackaroo(
       sounds.add('jk_force_burn');
       text = '${seat.name} أجبر ${state.players[nextIndex].name} على حرق ورقة';
     case 'burnForced':
+    case 'burn':
       sounds
         ..clear()
         ..add('jk_burn_cards');
