@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:audioplayers/audioplayers.dart';
 
 import 'sound_durations.dart';
+import 'audio_policy.dart';
 
 /// One clip in a planned, non-overlapping sequence.
 class ScheduledClip {
@@ -50,6 +51,16 @@ int sequenceLengthMs(List<ScheduledClip> plan) {
 }
 
 class SoundBoard {
+  SoundBoard({GameAudioPolicy? audioPolicy})
+    : _audioPolicy = audioPolicy ?? GameAudioPolicy.shared;
+  final GameAudioPolicy _audioPolicy;
+
+  // Source-owned policy, not injected at build time. On iOS every player's
+  // audio context is global; never force playback while RTC input is active.
+  Future<void> _initCtx() async {
+    await AudioPlayer.global.setAudioContext(_audioPolicy.soundContext);
+  }
+
   final AudioPlayer _a = AudioPlayer();
   final AudioPlayer _b = AudioPlayer();
   final AudioPlayer _loop = AudioPlayer();
@@ -78,7 +89,8 @@ class SoundBoard {
       await _loop.setReleaseMode(ReleaseMode.loop);
       await _loop.setVolume(1);
       await _loop.stop();
-      await _loop.play(AssetSource(_asset(name)));
+      await _initCtx();
+      await _loop.play(AssetSource(_asset(name)), volume: 1.0);
     } catch (_) {}
   }
 
@@ -97,7 +109,8 @@ class SoundBoard {
     _flip = !_flip;
     try {
       await player.stop();
-      await player.play(AssetSource(_asset(name)));
+      await _initCtx();
+      await player.play(AssetSource(_asset(name)), volume: 1.0);
     } catch (_) {}
   }
 
@@ -113,7 +126,8 @@ class SoundBoard {
       unawaited(player.dispose());
     });
     try {
-      await player.play(AssetSource(_asset(name)));
+      await _initCtx();
+      await player.play(AssetSource(_asset(name)), volume: 1.0);
     } catch (_) {}
   }
 
@@ -131,11 +145,8 @@ class SoundBoard {
       return Future<void>.value();
     }
     final now = DateTime.now().millisecondsSinceEpoch;
-    // Never let a backlog grow beyond a few seconds: drop stale waiting.
-    if (_queuedUntil - now > 6000) {
-      _queue = Future<void>.value();
-      _queuedUntil = now;
-    }
+    // Keep the current chain intact. Resetting it while a long clip is
+    // still running allowed later sequences to overlap that clip.
     final length = sequenceLengthMs(plan);
     _queuedUntil = (_queuedUntil > now ? _queuedUntil : now) + length + 60;
     final run = _queue.then((_) async {
