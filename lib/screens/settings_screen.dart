@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../echo_scope.dart';
 import '../services/doc_id.dart';
+import '../services/sound_player.dart';
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
@@ -48,10 +49,31 @@ class _SettingsScreenState extends State<SettingsScreen> {
             },
           ),
           const SizedBox(height: 12),
+          const Text('نسخة اختبار 1.3.3 (17)'),
+          OutlinedButton(
+            onPressed: () async {
+              await EchoScope.of(context).sounds.play('connected');
+            },
+            child: const Text('اختبار صوت اللعبة'),
+          ),
+          const Text(
+            'يضغط الزر لتشغيل صوت التأكيد. عدم ظهور خطأ لا يؤكد أنك سمعته.',
+          ),
+          ValueListenableBuilder<String?>(
+            valueListenable: SoundDiagnostics.lastFailure,
+            builder: (context, failure, _) => failure == null
+                ? const SizedBox.shrink()
+                : Text(
+                    'تعذر تشغيل الصوت. رمز التشخيص: $failure',
+                    semanticsLabel: 'تعذر تشغيل الصوت. رمز التشخيص: $failure',
+                  ),
+          ),
           SwitchListTile(
             contentPadding: EdgeInsets.zero,
             title: const Text('تشغيل الميكروفون تلقائياً عند دخول الطاولة'),
-            subtitle: const Text('متوقف افتراضياً. عند تفعيله يبدأ بث صوتك بعد منح إذن الميكروفون، ما لم يكتمك المضيف.'),
+            subtitle: const Text(
+              'متوقف افتراضياً. عند تفعيله يبدأ بث صوتك بعد منح إذن الميكروفون، ما لم يكتمك المضيف.',
+            ),
             value: settings.autoMicOnJoin,
             onChanged: (value) async {
               try {
@@ -85,14 +107,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
               settings.setUseInternalTts(value);
             },
           ),
-                 SwitchListTile(
+          SwitchListTile(
             title: const Text('لغة نطق الكروت (الإنجليزية / العربية)'),
             subtitle: const Text(
               'عند التفعيل: رقم الكرت ثم اسمه بالإنجليزية (مثل 10 of Diamonds). وعند الإيقاف: بالعربية (مثل 10 الديناري).',
             ),
             value: settings.nameCards,
             onChanged: (v) => settings.setNameCards(v),
-                    ),
+          ),
           const SizedBox(height: 8),
           const Text('تحكم بسرعة البوت'),
           Slider(
