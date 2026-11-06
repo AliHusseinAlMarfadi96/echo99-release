@@ -137,10 +137,10 @@ const { AccessToken } = require("livekit-server-sdk");
 const livekitApiSecret = defineSecret("LIVEKIT_API_SECRET");
 // Public coordinates, safe in source (same values the client already ships).
 const LIVEKIT_API_KEY = "APIKw29rPMTjQSy";
-// Short bounded TTL: grants (including host mutes) are static for a
-// token's lifetime, so muting someone must not wait hours. Ten minutes
-// bounds a stale publish grant; clients refresh at 80% of TTL, and the
-// server re-reads the seat flags on every call.
+// Token expiry limits the INITIAL connection only (LiveKit docs), never an
+// active session: muting a connected participant is enforced by
+// moderateVoiceParticipant via the server API, not by token expiry. A short
+// TTL still bounds rejoin with stale grants; clients refresh at 80%.
 const TOKEN_TTL_SECONDS = 10 * 60;
 
 exports.mintVoiceToken = onCall(
@@ -201,5 +201,91 @@ exports.mintVoiceToken = onCall(
       expiresInSeconds: TOKEN_TTL_SECONDS,
       canPublish,
     };
+  },
+);
+
+// ---------------------------------------------------------------------------
+// Host voice moderation (NOT DEPLOYED YET). Token expiry does NOT affect an
+// active LiveKit session (docs.livekit.io/frontends/reference/tokens-grants),
+// so host mutes are enforced here through the server API: updateParticipant
+// flips canPublish on the live participant; removeParticipant disconnects
+// (and on LiveKit Cloud revokes) them. The seat flags are updated in the same
+// call so the table state and the room state never diverge.
+const { RoomServiceClient } = require("livekit-server-sdk");
+
+const LIVEKIT_HTTP_URL = "https://echo99-0o54hspu.livekit.cloud";
+
+// Factory indirection so tests can stub the LiveKit server call.
+let roomServiceFactory = (host, key, secret) =>
+  new RoomServiceClient(host, key, secret);
+exports.__setRoomServiceFactoryForTests = (factory) => {
+  roomServiceFactory =
+    factory ||
+    ((host, key, secret) => new RoomServiceClient(host, key, secret));
+};
+
+exports.moderateVoiceParticipant = onCall(
+  { secrets: [livekitApiSecret] },
+  async (request) => {
+    if (!request.auth || !request.auth.uid) {
+      throw new HttpsError("unauthenticated", "Sign in first.");
+    }
+    const uid = request.auth.uid;
+    const tableId = String(request.data.tableId || "");
+    const targetId = String(request.data.targetId || "");
+    const action = String(request.data.action || "");
+    if (!tableId || !targetId || !action) {
+      throw new HttpsError(
+        "invalid-argument",
+        "tableId, targetId and action are required.",
+      );
+    }
+    if (!["mute", "unmute", "remove"].includes(action)) {
+      throw new HttpsError("invalid-argument", "Unknown action.");
+    }
+
+    const ref = db.collection("tables").doc(tableId);
+    const snap = await ref.get();
+    if (!snap.exists) {
+      throw new HttpsError("not-found", "Table not found.");
+    }
+    const state = snap.data();
+    // Host-only, exactly like hostSeatControl in table_repository.dart.
+    if (state.hostId !== uid) {
+      throw new HttpsError("permission-denied", "Only the host moderates.");
+    }
+    if (targetId === uid) {
+      throw new HttpsError("invalid-argument", "Cannot target yourself.");
+    }
+    const seats = Array.isArray(state.players) ? state.players : [];
+    const seat = seats.find((s) => s && s.id === targetId);
+    if (!seat) {
+      throw new HttpsError("not-found", "Target is not seated.");
+    }
+
+    const svc = roomServiceFactory(
+      LIVEKIT_HTTP_URL,
+      LIVEKIT_API_KEY,
+      livekitApiSecret.value(),
+    );
+    if (action === "remove") {
+      await svc.removeParticipant(tableId, targetId);
+    } else {
+      await svc.updateParticipant(tableId, targetId, {
+        permission: { canPublish: action === "unmute" },
+      });
+    }
+
+    // Keep the seat flag and the legacy board list in sync (older clients
+    // still read mutedMics), mirroring hostSeatControl.
+    if (action !== "remove") {
+      const players = seats.map((s) =>
+        s && s.id === targetId ? { ...s, micMuted: action === "mute" } : s,
+      );
+      const board = { ...(state.board || {}) };
+      board.mutedMics = players.filter((s) => s && s.micMuted).map((s) => s.id);
+      await ref.update({ players, board });
+    }
+    return { ok: true };
   },
 );
