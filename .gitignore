@@ -56,3 +56,4 @@ app.*.map.json
 .env.*
 /tmp/
 tool/*.env
+functions/node_modules/
