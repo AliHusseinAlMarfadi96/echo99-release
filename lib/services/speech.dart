@@ -2,6 +2,8 @@ import 'package:flutter/semantics.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_tts/flutter_tts.dart';
 
+import 'audio_policy.dart';
+
 /// Screen-reader announcements always; flutter_tts only when enabled.
 class Speech {
   FlutterTts? _tts;
@@ -14,6 +16,8 @@ class Speech {
     _tts ??= FlutterTts();
     try {
       await _tts!.setLanguage('ar-SA');
+      await _tts!.setSharedInstance(true);
+      await _tts!.autoStopSharedSession(false);
       await _tts!.setSpeechRate(0.48);
       await _tts!.awaitSpeakCompletion(true);
     } catch (_) {}
@@ -29,6 +33,16 @@ class Speech {
     await _ensureTts();
     try {
       await _tts?.stop();
+      final input = GameAudioPolicy.shared.needsInput;
+      await _tts?.setIosAudioCategory(
+        input
+            ? IosTextToSpeechAudioCategory.playAndRecord
+            : IosTextToSpeechAudioCategory.playback,
+        const [IosTextToSpeechAudioCategoryOptions.mixWithOthers],
+        input
+            ? IosTextToSpeechAudioMode.voiceChat
+            : IosTextToSpeechAudioMode.spokenAudio,
+      );
       await _tts?.speak(text);
     } catch (_) {}
   }
