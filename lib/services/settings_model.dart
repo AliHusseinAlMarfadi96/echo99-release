@@ -10,6 +10,7 @@ class SettingsModel extends ChangeNotifier {
     required this.useInternalTts,
     required this.nameCards,
     required this.botMillis,
+    this.autoMicOnJoin = false,
   });
 
   static const minBotMillis = 400;
@@ -29,6 +30,9 @@ class SettingsModel extends ChangeNotifier {
 
   int botMillis;
 
+  /// Explicit opt-in to microphone publishing on table entry.
+  bool autoMicOnJoin;
+
   static Future<SettingsModel> load() async {
     final prefs = await SharedPreferences.getInstance();
     var id = prefs.getString('player_id');
@@ -44,6 +48,7 @@ class SettingsModel extends ChangeNotifier {
       useInternalTts: prefs.getBool('use_internal_tts') ?? false,
       nameCards: prefs.getBool('name_cards') ?? true,
       botMillis: prefs.getInt('bot_millis') ?? 1500,
+      autoMicOnJoin: prefs.getBool('auto_mic_on_join') ?? false,
     );
   }
 
@@ -91,6 +96,14 @@ class SettingsModel extends ChangeNotifier {
     notifyListeners();
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool('name_cards', value);
+  }
+
+  Future<void> setAutoMicOnJoin(bool value) async {
+    final prefs = await SharedPreferences.getInstance();
+    final saved = await prefs.setBool('auto_mic_on_join', value);
+    if (!saved) throw StateError('Unable to save microphone preference');
+    autoMicOnJoin = value;
+    notifyListeners();
   }
 
   Future<void> setBotMillis(int value) async {
