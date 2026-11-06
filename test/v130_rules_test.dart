@@ -745,6 +745,140 @@ void main() {
       expect('${r3.state.board['text']}', contains('فاز فريق'));
     });
 
+        test('three players never start; individual 4-player has no partner', () {
+      var state = newWaitingTable(
+        id: 't',
+        name: 'طاولة',
+        hostId: 'A',
+        hostName: 'A',
+        settings: const TableSettings(startPoints: 10, timerSeconds: 0),
+        game: gameJackaroo,
+      );
+      state = addBot(state, 'B', 'B').state;
+      state = addBot(state, 'C', 'C').state;
+      final r = startGame(state, Random(1), 0);
+      expect(r.error, isNotNull, reason: 'rules PDF: 2 or 4 players only');
+      expect(r.state.status, 'waiting');
+
+      // 4 players, host picked the individual variant: no partner play,
+      // first finisher wins.
+      const h = jackarooHome;
+      final solo = jkTeam(
+        pieces: {
+          'A': [75, 77, 78, 79],
+          'B': [h, h, h, h],
+          'C': [10, h, h, h],
+          'D': [h, h, h, h],
+        },
+        hands: {'A': ['S1'], 'B': ['H2'], 'C': ['D2'], 'D': ['C2']},
+      );
+      final soloBoard = MatchState.fromMap({
+        ...solo.toMap(),
+        'board': {...solo.board, 'teams': false},
+      }, 't');
+      expect(jackarooPartner(soloBoard, 'A'), isNull);
+      final walk = jackarooMovesForCard(soloBoard, 'A', 'S1')
+          .firstWhere((m) => m.kind == 'forward');
+      expect(walk.owner, 'A', reason: 'no partner stones in solo play');
+      final done = playJackaroo(
+        soloBoard,
+        playerId: 'A',
+        move: walk,
+        random: Random(1),
+        nowMillis: 1,
+      ).state;
+      expect(done.status, 'finished', reason: 'first finisher wins solo');
+      expect('${done.board['text']}', isNot(contains('فاز فريق')));
+    });
+
+    test('wall chains, backward movement, and the 75/0 wrap', () {
+      const h = jackarooHome;
+      // Chain of three (B 30, C 31, D 32): only the rear stone is exposed.
+      final chain = jkTeam(
+        pieces: {
+          'A': [28, h, h, h],
+          'B': [11, h, h, h],
+          'C': [69, h, h, h],
+          'D': [51, h, h, h],
+        },
+        hands: {'A': ['S3'], 'B': ['H2'], 'C': ['D2'], 'D': ['C2']},
+      );
+      // B abs 30, C abs (38+69)%76=31, D abs (57+50)%76=31... adjust below.
+      final occ = JackarooBoard.of(chain).occupancy();
+      expect(occ[30], isNotNull);
+      // A at 28 with 3: passing 30 is fine, but 31 is protected by 30.
+      expect(jackarooMovesForCard(chain, 'A', 'S3'), isEmpty);
+      // With a 2, A lands on the exposed rear stone at 30.
+      final chain2 = jkTeam(
+        pieces: {
+          'A': [28, h, h, h],
+          'B': [11, h, h, h],
+          'C': [69, h, h, h],
+          'D': [51, h, h, h],
+        },
+        hands: {'A': ['S2'], 'B': ['H2'], 'C': ['D2'], 'D': ['C2']},
+      );
+      expect(jackarooMovesForCard(chain2, 'A', 'S2'), hasLength(1));
+
+      // Backward: A at 34, wall at abs 32/31 (D 32, C 31) blocks the pass.
+      final back = jkTeam(
+        pieces: {
+          'A': [34, h, h, h],
+          'B': [h, h, h, h],
+          'C': [69, h, h, h],
+          'D': [51, h, h, h],
+        },
+        hands: {'A': ['S4'], 'B': ['H2'], 'C': ['D2'], 'D': ['C2']},
+      );
+      expect(jackarooMovesForCard(back, 'A', 'S4'), isEmpty);
+      // Single exposed stone is passed backward freely.
+      final backOk = jkTeam(
+        pieces: {
+          'A': [34, h, h, h],
+          'B': [h, h, h, h],
+          'C': [69, h, h, h],
+          'D': [h, h, h, h],
+        },
+        hands: {'A': ['S4'], 'B': ['H2'], 'C': ['D2'], 'D': ['C2']},
+      );
+      expect(jackarooMovesForCard(backOk, 'A', 'S4'), hasLength(1));
+
+      // Wrap: B at abs 75 (progress 56), D at abs 0 (progress 19) — D is
+      // protected by B across the 75/0 wrap. C (base 38) at progress 35 =
+      // abs 73; a 3 lands on abs 0, so the move is not offered.
+      final wrap = jkTeam(
+        pieces: {
+          'A': [h, h, h, h],
+          'B': [56, h, h, h],
+          'C': [35, h, h, h],
+          'D': [19, h, h, h],
+        },
+        hands: {'A': ['H2'], 'B': ['H2'], 'C': ['S3'], 'D': ['C2']},
+        turn: 'C',
+      );
+      expect(jackarooMovesForCard(wrap, 'C', 'S3'), isEmpty);
+      // C at progress 34 (abs 72) with 3 lands on the exposed 75: capture.
+      final wrap2 = jkTeam(
+        pieces: {
+          'A': [h, h, h, h],
+          'B': [56, h, h, h],
+          'C': [34, h, h, h],
+          'D': [19, h, h, h],
+        },
+        hands: {'A': ['H2'], 'B': ['H2'], 'C': ['S3'], 'D': ['C2']},
+        turn: 'C',
+      );
+      final move = jackarooMovesForCard(wrap2, 'C', 'S3').single;
+      final r = playJackaroo(
+        wrap2,
+        playerId: 'C',
+        move: move,
+        random: Random(1),
+        nowMillis: 1,
+      );
+      expect(JackarooBoard.of(r.state).pieces['B']![0], h);
+    });
+
         test('normal king walk is not offered; complex 5 cannot home an enemy', () {
       const h = jackarooHome;
       final normal = jk(a: [10, h, h, h], b: [h, h, h, h], handA: ['S13']);
