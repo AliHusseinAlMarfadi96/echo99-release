@@ -1,11 +1,8 @@
 /// Client for the server-minted LiveKit voice token (functions/mintVoiceToken).
 ///
-/// NOT WIRED YET: VoiceRoom still uses mintConfiguredToken (client-side JWT).
-/// Activation is a separate slice after the owner deploys the function:
-/// bind `_defaultCall` to
-/// `FirebaseFunctions.instance.httpsCallable('mintVoiceToken')` (adds the
-/// cloud_functions package) and call [mint] before joining, then again at
-/// [VoiceToken.refreshAfter] while the room stays open.
+/// VoiceTokenTransport binds the app to an authenticated HTTPS endpoint.
+/// Endpoint deployment and VOICE_TOKEN_ENDPOINT configuration are required;
+/// an absent endpoint fails closed without falling back to a client secret.
 ///
 /// Grant semantics: the server binds the token to the table's room and sets
 /// canPublish=false for host-muted seats. Grants are static for the token's
@@ -69,14 +66,14 @@ class VoiceTokenClient {
     try {
       res = await _call(tableId);
     } catch (e) {
-      throw VoiceTokenException('token call failed: $e');
+      throw const VoiceTokenException('token call failed');
     }
     final token = res['token'];
     final ttl = res['expiresInSeconds'];
     if (token is! String || token.isEmpty) {
       throw const VoiceTokenException('server returned no token');
     }
-    if (ttl is! int || ttl <= 0) {
+    if (ttl is! int || ttl <= 0 || ttl > 86400) {
       throw const VoiceTokenException('server returned no expiry');
     }
     final lifetime = Duration(milliseconds: (ttl * 1000 * refreshFraction).round());
