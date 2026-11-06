@@ -459,7 +459,7 @@ void _deal(
   for (final seat in players) {
     hands[seat.id] = <String>[];
   }
-  for (var round = 0; round < 4; round++) {
+  for (var round = 0; round < 3; round++) {
     for (final seat in players) {
       if (seat.points > 0 && deck.isNotEmpty) {
         hands[seat.id]!.add(deck.removeAt(0));
@@ -1037,7 +1037,7 @@ EngineResult _playCardRaw(
           redealt: true,
         ),
         cue: SoundCue(
-          type: 'metal',
+          type: resolution.outcome == 'bust' ? 'glass' : 'metal',
           nonce: nonce,
           also: playCues(resolution, rank: card.rank),
         ),
