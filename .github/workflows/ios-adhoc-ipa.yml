@@ -25,6 +25,7 @@ jobs:
         env:
           LIVEKIT_URL: ${{ secrets.LIVEKIT_URL }}
           VOICE_TOKEN_SERVER: "true"
+          VOICE_TOKEN_ENDPOINT: ${{ vars.VOICE_TOKEN_ENDPOINT }}
         run: |
           set -euo pipefail
           umask 077
@@ -37,6 +38,8 @@ jobs:
           data.pop('LIVEKIT_API_SECRET', None)
           data.pop('LIVEKIT_API_KEY', None)
           data['VOICE_TOKEN_SERVER'] = 'true'
+          import os
+          data['VOICE_TOKEN_ENDPOINT'] = os.environ.get('VOICE_TOKEN_ENDPOINT', '')
           p.write_text(json.dumps(data))
           PY
           export CODE_SIGNING_ALLOWED=NO
