@@ -684,6 +684,41 @@ void main() {
       expect(label, contains('على بُعد 4'));
     });
 
+    test('seat changes speak who joined and left', () {
+      const h = jackarooHome;
+      final before = jk4p(
+        a: [10, h, h, h],
+        b: [20, h, h, h],
+        c: [50, h, h, h],
+        d: [h, h, h, h],
+        handA: ['S2'],
+      );
+      // A human joins.
+      final joined = MatchState.fromMap({
+        ...before.toMap(),
+        'players': [
+          ...before.players.map((p) => p.toMap()),
+          {'id': 'E', 'name': 'خالد', 'points': 10, 'isBot': false},
+        ],
+      }, 't');
+      expect(
+        seatChangeSpeechLines(before, joined, 'A'),
+        ['انضم خالد إلى الطاولة'],
+      );
+      // A human leaves and a bot takes the seat: only the departure speaks.
+      final replaced = MatchState.fromMap({
+        ...before.toMap(),
+        'players': [
+          for (final p in before.players)
+            if (p.id != 'B') p.toMap(),
+          {'id': 'bot1', 'name': 'بوت (B)', 'points': 10, 'isBot': true},
+        ],
+      }, 't');
+      expect(seatChangeSpeechLines(before, replaced, 'A'), ['غادر B الطاولة']);
+      // My own seat change never speaks.
+      expect(seatChangeSpeechLines(before, before, 'A'), isEmpty);
+    });
+
     test('partner capture keeps both the warning and the context', () {
       const h = jackarooHome;
       // 4-player team game: C is A's partner (base 38). C stone at abs 12
