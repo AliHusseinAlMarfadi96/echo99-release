@@ -229,7 +229,10 @@ int jackarooSixChain(MatchState state) =>
 
 /// The partner across the table in a 4-player team game, else null.
 String? jackarooPartner(MatchState state, String owner) {
-  if (state.players.length != 4) {
+  // The 4-player individual variant (كل لاعب لنفسه) has no partner; the
+  // host picks teams vs individual at start (rules PDF). Boards without the
+  // flag predate the choice and keep the team behavior.
+  if (state.players.length != 4 || state.board['teams'] == false) {
     return null;
   }
   final idx = state.players.indexWhere((s) => s.id == owner);
@@ -752,7 +755,8 @@ String jackarooMoveLabel(MatchState state, JackarooMove move) {
 /// Starts (or restarts) a Jackaroo match: 2–4 players, 4 cards each.
 EngineResult startJackaroo(MatchState state, Random random, int nowMillis) {
   final count = state.players.length;
-  if (count < 2 || count > 4) {
+  // Rules PDF: two or four players only — a table never starts with three.
+  if (count != 2 && count != 4) {
     return EngineResult(state, jackarooCountError);
   }
   final colors = <String, int>{};
@@ -805,7 +809,7 @@ EngineResult startJackaroo(MatchState state, Random random, int nowMillis) {
   );
 }
 
-const jackarooCountError = 'Jackaroo من 2 إلى 4 لاعبين';
+const jackarooCountError = 'Jackaroo تُلعب بلاعبين اثنين أو أربعة فقط';
 
 Map<String, List<String>> _dealJackaroo(
   List<Seat> players,
