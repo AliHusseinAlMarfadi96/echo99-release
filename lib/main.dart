@@ -25,6 +25,7 @@ import 'services/sounds.dart';
 import 'services/speech.dart';
 import 'services/table_repository.dart';
 import 'services/voice_room.dart';
+import 'services/voice_token_transport.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -65,6 +66,7 @@ class _Echo99AppState extends State<Echo99App> with WidgetsBindingObserver {
   final _sounds = SoundBoard();
   final _speech = Speech();
   final _voice = VoiceRoom();
+  final _voiceTokens = VoiceTokenTransport.configured();
   final _presence = PresenceService();
   late final AccountController _account;
   TableRepository? _repo;
@@ -85,6 +87,7 @@ class _Echo99AppState extends State<Echo99App> with WidgetsBindingObserver {
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    _voice.serverTokenCall = _voiceTokens.mint;
     _account = AccountController(
       widget.settings,
       firebaseReady: widget.firebaseReady,
@@ -394,6 +397,7 @@ class _Echo99AppState extends State<Echo99App> with WidgetsBindingObserver {
     unawaited(_presence.goOffline());
     _account.dispose();
     widget.settings.dispose();
+    _voiceTokens.close();
     super.dispose();
   }
 
