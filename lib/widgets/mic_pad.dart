@@ -49,9 +49,9 @@ class MicPad extends StatelessWidget {
             child: Row(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                Icon(micOn ? Icons.mic : Icons.mic_off),
+                Icon(micOn ? Icons.mic : Icons.mic_off, color: Colors.white),
                 const SizedBox(width: 8),
-                Text(label),
+                Text(label, style: const TextStyle(color: Colors.white)),
               ],
             ),
           ),
