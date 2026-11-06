@@ -716,6 +716,112 @@ String jackarooKillSuffix(MatchState state, List<(String, int)> kills) {
   return '، ${parts.join('، ')}';
 }
 
+
+/// After [move], names the nearest stone ahead of and behind the moved
+/// piece with track distances (rules text: the player must hear who will be
+/// ahead of them and who behind after the move, and by how many squares).
+String jackarooContextSuffix(MatchState state, JackarooMove move) {
+  final board = JackarooBoard.of(state);
+  JackarooBoard? after;
+  var who = move.owner;
+  var index = move.piece;
+  switch (move.kind) {
+    case 'forward':
+      final rank = PlayingCard.parse(move.card)?.rank ?? 0;
+      after = jackarooAdvance(
+        board,
+        move.owner,
+        move.piece,
+        move.steps,
+        kingSweep: rank == 13 && board.complex,
+      )?.board;
+      break;
+    case 'back':
+      after = jackarooAdvance(board, move.owner, move.piece, -4)?.board;
+      break;
+    case 'split':
+      final first = jackarooAdvance(board, move.owner, move.piece, move.steps);
+      final second = first == null
+          ? null
+          : jackarooAdvance(
+              first.board,
+              move.owner2,
+              move.piece2,
+              move.steps2,
+            );
+      after = second?.board;
+      who = move.owner2;
+      index = move.piece2;
+      break;
+    case 'swap':
+      after = jackarooSwap(
+        board,
+        move.owner,
+        move.piece,
+        move.targetOwner,
+        move.targetPiece,
+      )?.board;
+      break;
+    default:
+      return '';
+  }
+  if (after == null) {
+    return '';
+  }
+  final pos = after.pieces[who]?[index];
+  if (pos == null) {
+    return '';
+  }
+  final meAbs = after.absolute(who, pos);
+  if (meAbs == null) {
+    return ''; // base or safe slot: no track neighbours
+  }
+  final occ = after.occupancy();
+  (String, int)? ahead;
+  (String, int)? behind;
+  var aheadDist = 0;
+  var behindDist = 0;
+  for (var d = 1; d < jackarooTrack && (ahead == null || behind == null); d++) {
+    if (ahead == null) {
+      final hit = occ[(meAbs + d) % jackarooTrack];
+      if (hit != null &&
+          hit != behind &&
+          (hit.$1 != who || hit.$2 != index)) {
+        ahead = hit;
+        aheadDist = d;
+      }
+    }
+    if (behind == null) {
+      final hit = occ[(meAbs - d) % jackarooTrack];
+      if (hit != null && (hit.$1 != who || hit.$2 != index)) {
+        behind = hit;
+        behindDist = d;
+      }
+    }
+  }
+  if (ahead == null && behind == null) {
+    return '';
+  }
+  if (ahead != null && ahead == behind) {
+    // One other stone on the loop: it is both ahead and behind; keep the
+    // nearer direction only.
+    if (aheadDist <= behindDist) {
+      behind = null;
+    } else {
+      ahead = null;
+    }
+  }
+  final parts = <String>[
+    if (ahead != null)
+      'يصبح أمامك ${jackarooPieceLabel(state, ahead.$1, ahead.$2)} '
+          'على بُعد $aheadDist',
+    if (behind != null)
+      'يصبح خلفك ${jackarooPieceLabel(state, behind.$1, behind.$2)} '
+          'على بُعد $behindDist',
+  ];
+  return '، ${parts.join('، و')}';
+}
+
 String jackarooMoveLabel(MatchState state, JackarooMove move) {
   final card = PlayingCard.parse(move.card);
   final cardName = card?.englishName ?? move.card;
@@ -728,27 +834,31 @@ String jackarooMoveLabel(MatchState state, JackarooMove move) {
       return '$cardName: تبديل ${piece(move.owner, move.piece)} '
           '(${_where(board, move.owner, board.pieces[move.owner]![move.piece])}) '
           'مع ${piece(move.targetOwner, move.targetPiece)} '
-          '(${_where(board, move.targetOwner, board.pieces[move.targetOwner]![move.targetPiece])})';
+          '(${_where(board, move.targetOwner, board.pieces[move.targetOwner]![move.targetPiece])})'
+          '${jackarooContextSuffix(state, move)}';
     case 'back':
       return '$cardName: إرجاع ${piece(move.owner, move.piece)} 4 خطوات'
-          '${jackarooKillSuffix(state, jackarooMoveKills(state, move))}';
+          '${jackarooKillSuffix(state, jackarooMoveKills(state, move))}'
+          '${jackarooContextSuffix(state, move)}';
     case 'split':
-      return '$cardName: ${piece(move.owner, move.piece)} ${move.steps} '
-          'و${piece(move.owner2, move.piece2)} ${move.steps2}'
-          '${jackarooKillSuffix(state, jackarooMoveKills(state, move))}';
+      return '$cardName: أولاً ${piece(move.owner, move.piece)} ${move.steps} '
+          'خطوات، ثم ${piece(move.owner2, move.piece2)} ${move.steps2}'
+          '${jackarooKillSuffix(state, jackarooMoveKills(state, move))}'
+          '${jackarooContextSuffix(state, move)}';
     case 'burnNext':
       return '$cardName: حرق ورقة من اللاعب التالي';
     case 'burnAll':
-      return 'لا توجد حركة — حرق جميع الأوراق';
+      return 'لا توجد حركة، حرق جميع الأوراق';
     case 'burnForced':
     case 'burn':
       return 'حرق $cardName';
     case 'sixForfeit':
-      return '$cardName: ثالث ستة متتالية — يخسر الدور';
+      return '$cardName: ثالث ستة متتالية، يخسر الدور';
     default:
       return '$cardName: تحريك ${piece(move.owner, move.piece)} '
           '${move.steps} خطوات'
-          '${jackarooKillSuffix(state, jackarooMoveKills(state, move))}';
+          '${jackarooKillSuffix(state, jackarooMoveKills(state, move))}'
+          '${jackarooContextSuffix(state, move)}';
   }
 }
 
