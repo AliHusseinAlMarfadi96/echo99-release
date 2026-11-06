@@ -34,13 +34,6 @@ if p.exists(): p.write_text(p.read_text("utf-8").replace("moves.length == 1 && r
 p = Path("lib/services/table_repository.dart")
 if p.exists(): p.write_text(p.read_text("utf-8").replace(";;", ";"), "utf-8")
 
-p = Path("lib/services/social_repository.dart")
-unfollow_code = "try { await _db.collection('users').doc(uid).collection('friends').doc(friendUid).delete(); } catch (_) {} try { await _db.collection('users').doc(uid).collection('friendRequests').doc(friendUid).delete(); } catch (_) {} try { await _db.collection('users').doc(friendUid).collection('friendRequests').doc(uid).delete(); } catch (_) {} try { final f = await _db.collection('users').doc(uid).collection('friends').get(); for (final d in f.docs) { if (d.id == uid || d.id == friendUid || d.data().values.any((v) => '$v'.contains('علي حسين المرفدي'))) await d.reference.delete(); } } catch (_) {} try { final r = await _db.collection('users').doc(uid).collection('friendRequests').get(); for (final d in r.docs) { if (d.id == uid || d.id == friendUid || d.data().values.any((v) => '$v'.contains('علي حسين المرفدي'))) await d.reference.delete(); } } catch (_) {}"
-if p.exists(): p.write_text(re.sub(r"await\s+_db\s*\.collection\('users'\)\s*\.doc\(uid\)\s*\.collection\('friends'\)\s*\.doc\(friendUid\)\s*\.delete\(\);", unfollow_code, p.read_text("utf-8")), "utf-8")
-
-p = Path("lib/screens/friends_screen.dart")
-if p.exists() and "FirebaseAuth.instance" not in p.read_text("utf-8"): p.write_text("import 'package:firebase_auth/firebase_auth.dart';\n" + p.read_text("utf-8").replace("final uid = scope.settings.playerId;", "final uid = FirebaseAuth.instance.currentUser?.uid ?? scope.settings.playerId; social?.unfollow(uid: uid, friendUid: uid); if (scope.settings.playerId != uid) social?.unfollow(uid: scope.settings.playerId, friendUid: scope.settings.playerId);"), "utf-8")
-
 dest = Path(sys.argv[1] if len(sys.argv) > 1 else "tool/livekit.defines.json")
 current = json.loads(dest.read_text("utf-8")) if dest.exists() else {}
 out = {k: v for k, v in (current.items() if isinstance(current, dict) else []) if isinstance(k, str) and isinstance(v, str) and v and not k.startswith("GOOGLE_")}
