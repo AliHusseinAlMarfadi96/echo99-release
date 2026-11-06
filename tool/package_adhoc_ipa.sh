@@ -74,6 +74,7 @@ import json
 from pathlib import Path
 root = Path(app)
 frameworks = root / 'Frameworks'
+native_frameworks = set()
 for manifest in root.rglob('NativeAssetsManifest.json'):
     data = json.loads(manifest.read_text())
     for target, assets in data.get('native-assets', {}).items():
@@ -90,7 +91,42 @@ for manifest in root.rglob('NativeAssetsManifest.json'):
             candidates = (frameworks / rel, root / rel, manifest.parent / rel)
             if not any(path.is_file() for path in candidates):
                 raise SystemExit(f'Missing required native asset: {asset_id}: {rel}')
+            if '.framework' in rel.parts[0]:
+                native_frameworks.add(rel.parts[0])
             print(f'verified native asset {asset_id}: {rel}')
+
+# Start from executable/App/Flutter and explicit Dart FFI entries. Follow the
+# full Mach-O dependency closure before removing unused CocoaPods wrappers.
+# Some unused static-Pod wrappers carry an intentionally impossible iOS100
+# deployment target; keeping those changes the app's compatibility incorrectly.
+import shutil
+required = {'App.framework', 'Flutter.framework'} | native_frameworks
+pending = list(iter_macho(app))
+pending = [p for p in pending if 'Frameworks' not in Path(p).relative_to(root).parts]
+for entry in required:
+    pending.extend(iter_macho(str(frameworks / entry)))
+seen = set()
+while pending:
+    path = pending.pop()
+    if path in seen:
+        continue
+    seen.add(path)
+    for buf in slices(path):
+        for cmd, blob in walk_cmds(buf):
+            if cmd not in (0xC, 0x18, 0x80000018, 0x8000001F, 0x80000023):
+                continue
+            name = cmd_name(blob)
+            if '.framework/' not in name or name.startswith('/System/'):
+                continue
+            entry = name.split('.framework/')[0].split('/')[-1] + '.framework'
+            if entry not in required:
+                required.add(entry)
+                pending.extend(iter_macho(str(frameworks / entry)))
+if frameworks.is_dir():
+    for entry in frameworks.glob('*.framework'):
+        if entry.name not in required:
+            shutil.rmtree(entry)
+            print(f'removed unused non-FFI framework {entry.name}')
 
 # Validate embedded framework/dylib dependencies, including weak/re-exported
 # dependencies and those of FFI frameworks that Runner does not link directly.
