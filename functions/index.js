@@ -118,3 +118,84 @@ exports.sweepGhostTables = onSchedule(
     });
   }
 );
+
+// ---------------------------------------------------------------------------
+// LiveKit voice token endpoint (NOT DEPLOYED YET).
+//
+// Why: the app currently mints room JWTs on the client from a
+// LIVEKIT_API_SECRET baked in at build time, so every shipped APK carries
+// the secret. Here the secret never leaves the server.
+//
+// Deploy (owner action): firebase deploy --only functions
+//   then: firebase functions:secrets:set LIVEKIT_API_SECRET
+// Client change (separate slice): replace mintConfiguredToken() in
+// lib/livekit_token.dart with a call here and re-call before expiry.
+const { onCall, HttpsError } = require("firebase-functions/v2/https");
+const { defineSecret } = require("firebase-functions/params");
+const { AccessToken } = require("livekit-server-sdk");
+
+const livekitApiSecret = defineSecret("LIVEKIT_API_SECRET");
+// Public coordinates, safe in source (same values the client already ships).
+const LIVEKIT_API_KEY = "APIKw29rPMTjQSy";
+const TOKEN_TTL_SECONDS = 6 * 60 * 60; // matches the old client-side tokens
+
+exports.mintVoiceToken = onCall(
+  { secrets: [livekitApiSecret] },
+  async (request) => {
+    // 1. The caller must be signed in with Firebase Auth.
+    if (!request.auth || !request.auth.uid) {
+      throw new HttpsError("unauthenticated", "Sign in first.");
+    }
+    const uid = request.auth.uid;
+    const tableId = String(request.data.tableId || "");
+    if (!tableId) {
+      throw new HttpsError("invalid-argument", "tableId is required.");
+    }
+
+    // 2. The caller must hold a seat at this exact table; the LiveKit room
+    //    name is bound to the table id, so a token for one table never
+    //    opens another table's room.
+    const snap = await db.collection("tables").doc(tableId).get();
+    if (!snap.exists) {
+      throw new HttpsError("not-found", "Table not found.");
+    }
+    const state = snap.data();
+    const seats = Array.isArray(state.players) ? state.players : [];
+    const seat = seats.find((s) => s && s.id === uid);
+    if (!seat) {
+      throw new HttpsError(
+        "permission-denied",
+        "Only seated players can join the voice room.",
+      );
+    }
+
+    // 3. Mic grants follow the table state: a host-muted seat (current flag
+    //    or the legacy board list older clients still write) receives a
+    //    listen-only token.
+    const legacyMuted =
+      state.board && Array.isArray(state.board.mutedMics)
+        ? state.board.mutedMics
+        : [];
+    const canPublish = !(seat.micMuted === true || legacyMuted.includes(uid));
+
+    const displayName = String(seat.name || uid).slice(0, 128);
+    const token = new AccessToken(LIVEKIT_API_KEY, livekitApiSecret.value(), {
+      identity: uid,
+      name: displayName,
+      ttl: TOKEN_TTL_SECONDS,
+    });
+    token.addGrant({
+      room: tableId,
+      roomJoin: true,
+      canPublish,
+      canSubscribe: true,
+      canPublishData: true,
+    });
+
+    return {
+      token: await token.toJwt(),
+      expiresInSeconds: TOKEN_TTL_SECONDS,
+      canPublish,
+    };
+  },
+);
