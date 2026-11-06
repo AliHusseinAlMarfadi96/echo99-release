@@ -594,6 +594,43 @@ void main() {
       }, 't');
     }
 
+    test('move options say who ends up ahead and behind, with distances', () {
+      const h = jackarooHome;
+      // A at progress 10 (abs 10); B stones at abs 15 (progress 72, base 19)
+      // and abs 5 (progress 62). A walks 2 to abs 12.
+      final s = jk(a: [10, h, h, h], b: [72, 62, h, h], handA: ['S2']);
+      final move = jackarooMovesForCard(s, 'A', 'S2')
+          .firstWhere((m) => m.kind == 'forward');
+      final label = jackarooMoveLabel(s, move);
+      expect(label, contains('يصبح أمامك'));
+      expect(label, contains('على بُعد 3'));
+      expect(label, contains('يصبح خلفك'));
+      expect(label, contains('على بُعد 7'));
+    });
+
+    test('swap option carries the ahead/behind context', () {
+      const h = jackarooHome;
+      final s = jk(a: [10, h, h, h], b: [53, h, h, h], handA: ['S11']);
+      final move = jackarooMovesForCard(s, 'A', 'S11')
+          .firstWhere((m) => m.kind == 'swap');
+      final label = jackarooMoveLabel(s, move);
+      expect(label, contains('تبديل'));
+      expect(label, contains('يصبح أمامك'));
+      expect(label, contains('على بُعد 14'));
+      expect(label, isNot(contains('يصبح خلفك')));
+    });
+
+    test('seven split names the ordered steps', () {
+      const h = jackarooHome;
+      final s = jk(a: [10, 20, h, h], b: [h, h, h, h], handA: ['S7']);
+      final split = jackarooMovesForCard(s, 'A', 'S7')
+          .firstWhere((m) => m.kind == 'split');
+      final label = jackarooMoveLabel(s, split);
+      expect(label, contains('أولاً'));
+      expect(label, contains('ثم'));
+    });
+
+
     test('landing on your own stone returns it home with the own-kill clip', () {
       const h = jackarooHome;
       final s = jk(a: [10, 12, h, h], b: [h, h, h, h], handA: ['S2']);
