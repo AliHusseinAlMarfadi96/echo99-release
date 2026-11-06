@@ -13,6 +13,22 @@ import '../livekit_token.dart';
 /// Host mute (`Seat.micMuted` / board mutedMics): local unmute is blocked and
 /// remote audio tracks for that identity stay disabled until the host clears.
 class VoiceRoom {
+  /// Secure server-issued voice tokens: prepared, off by default.
+  ///
+  /// Enable with `--dart-define=VOICE_TOKEN_SERVER=true` AFTER the Cloud
+  /// Functions in `functions/` (mintVoiceToken / moderateVoiceParticipant)
+  /// are deployed and [serverTokenCall] is bound to
+  /// FirebaseFunctions.instance.httpsCallable('mintVoiceToken'). Server
+  /// mode deliberately has NO fallback to the bundled LIVEKIT_API_SECRET
+  /// path: that legacy path ships the signing secret inside every installed
+  /// APK and is kept only until server mode ships, then deleted.
+  static const bool _useServerTokens =
+      bool.fromEnvironment('VOICE_TOKEN_SERVER');
+
+  /// Injected server token callable (room name in, signed token out).
+  /// Unbound until server mode is activated; server joins fail closed.
+  Future<String> Function(String roomName)? serverTokenCall;
+
   bool inConversation = false;
   Future<void> joinConversation() async {
     inConversation = true;
@@ -31,6 +47,9 @@ class VoiceRoom {
   /// Identities currently host-muted (from Firestore seat flags).
   Set<String> _hostMuted = {};
 
+  /// Server revoked our publish grant (moderateVoiceParticipant).
+  bool _serverMuted = false;
+
   /// Local identity — unmute rejected while listed in [_hostMuted].
   String? _identity;
 
@@ -43,6 +62,8 @@ class VoiceRoom {
   static const unconfigured =
       'الصوت غير مهيأ. مرّر LIVEKIT_API_SECRET عند البناء.';
 
+  static const serverUnconfigured = 'الصوت غير متاح حالياً.';
+
   static const hostMutedError = 'المضيف كتم ميكروفونك';
 
   Future<String?> _connect({
@@ -50,11 +71,24 @@ class VoiceRoom {
     required String displayName,
     required String tableId,
   }) async {
-    final token = mintConfiguredToken(
-      identity: identity,
-      displayName: displayName,
-      room: tableId,
-    );
+    String? token;
+    if (_useServerTokens) {
+      final call = serverTokenCall;
+      if (call == null) {
+        return serverUnconfigured;
+      }
+      try {
+        token = await call(tableId);
+      } catch (_) {
+        return serverUnconfigured;
+      }
+    } else {
+      token = mintConfiguredToken(
+        identity: identity,
+        displayName: displayName,
+        room: tableId,
+      );
+    }
     if (token == null) {
       return unconfigured;
     }
@@ -92,6 +126,21 @@ class VoiceRoom {
       })
       ..on<ParticipantConnectedEvent>((_) {
         unawaited(_applyRemoteMutes());
+      })
+      ..on<ParticipantPermissionsUpdatedEvent>((event) {
+        // Server-side moderation changed our grants. LiveKit auto-refreshes
+        // the token of a connected client, so this is the authoritative
+        // signal; the 10-minute token TTL only bounds rejoins.
+        final muted = !event.permissions.canPublish;
+        if (muted != _serverMuted) {
+          _serverMuted = muted;
+          if (muted && micOn) {
+            unawaited(
+              _room?.localParticipant?.setMicrophoneEnabled(false),
+            );
+            micOn = false;
+          }
+        }
       });
     previous?.dispose();
   }
@@ -156,7 +205,7 @@ class VoiceRoom {
     required String tableId,
   }) async {
     try {
-      if (enabled && _hostMuted.contains(identity)) {
+      if (enabled && (_hostMuted.contains(identity) || _serverMuted)) {
         return hostMutedError;
       }
       final error = await _connect(
@@ -221,6 +270,7 @@ class VoiceRoom {
     _tableId = null;
     _identity = null;
     _hostMuted = {};
+    _serverMuted = false;
     micOn = false;
     sharingAudio = false;
   }
