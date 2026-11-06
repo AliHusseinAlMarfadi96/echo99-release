@@ -555,6 +555,196 @@ void main() {
       expect(r4.cue!.also, contains('jk_reshuffle'));
     });
 
+        MatchState jkTeam({
+      required Map<String, List<int>> pieces,
+      required Map<String, List<String>> hands,
+      String turn = 'A',
+      bool complex = false,
+    }) {
+      var state = newWaitingTable(
+        id: 't',
+        name: 'طاولة',
+        hostId: 'A',
+        hostName: 'A',
+        settings: const TableSettings(startPoints: 10, timerSeconds: 0),
+        game: gameJackaroo,
+      );
+      for (final id in ['B', 'C', 'D']) {
+        state = addBot(state, id, id).state;
+      }
+      state = applyJackarooMode(
+        state,
+        complex ? jackarooComplex : jackarooStandard,
+        0,
+      ).state;
+      state = startGame(state, Random(2), 0).state;
+      final turnIndex = ['A', 'B', 'C', 'D'].indexOf(turn);
+      return MatchState.fromMap({
+        ...state.toMap(),
+        'turnIndex': turnIndex,
+        'hands': hands,
+        'board': {
+          'mode': complex ? jackarooComplex : jackarooStandard,
+          'colors': {'A': 0, 'B': 1, 'C': 2, 'D': 3},
+          'pieces': pieces,
+          'sixChain': 0,
+          'dealer': 0,
+          'dealRound': 1,
+        },
+      }, 't');
+    }
+
+    test('landing on your own stone returns it home with the own-kill clip', () {
+      const h = jackarooHome;
+      final s = jk(a: [10, 12, h, h], b: [h, h, h, h], handA: ['S2']);
+      final move = jackarooMovesForCard(s, 'A', 'S2')
+          .firstWhere((m) => m.piece == 0);
+      final label = jackarooMoveLabel(s, move);
+      expect(label, contains('تنبيه'));
+      expect(label, contains('حجرك'));
+      final r = playJackaroo(
+        s,
+        playerId: 'A',
+        move: move,
+        random: Random(1),
+        nowMillis: 1,
+      );
+      expect(r.error, isNull);
+      final board = JackarooBoard.of(r.state);
+      expect(board.pieces['A']![0], 12);
+      expect(board.pieces['A']![1], h, reason: 'own stone went home');
+      expect(r.state.cue!.also, contains('jk_kill_own'));
+      expect(r.state.cue!.also, isNot(contains('jk_kill')));
+    });
+
+    test('two players sit opposite: bases 0 and 38', () {
+      var state = newWaitingTable(
+        id: 't',
+        name: 'طاولة',
+        hostId: 'A',
+        hostName: 'A',
+        settings: const TableSettings(startPoints: 10, timerSeconds: 0),
+        game: gameJackaroo,
+      );
+      state = addBot(state, 'B', 'B').state;
+      final started = startGame(state, Random(2), 0).state;
+      final board = JackarooBoard.of(started);
+      expect(board.colors, {'A': 0, 'B': 2});
+      expect(board.baseOf('B'), 38);
+    });
+
+    test('a wall of mixed colors protects its front stone', () {
+      const h = jackarooHome;
+      // B at abs 30 (progress 11), C at abs 31 (progress 69 from base 38):
+      // adjacent, different colors — still a wall. A at 28 cannot pass.
+      final s = jkTeam(
+        pieces: {
+          'A': [28, h, h, h],
+          'B': [11, h, h, h],
+          'C': [69, h, h, h],
+          'D': [h, h, h, h],
+        },
+        hands: {'A': ['S5'], 'B': ['H2'], 'C': ['D2'], 'D': ['C2']},
+      );
+      expect(jackarooMovesForCard(s, 'A', 'S5'), isEmpty);
+      // But the rear stone is exposed: a 2 lands on abs 30 and returns B.
+      final s2 = jkTeam(
+        pieces: {
+          'A': [28, h, h, h],
+          'B': [11, h, h, h],
+          'C': [69, h, h, h],
+          'D': [h, h, h, h],
+        },
+        hands: {'A': ['S2'], 'B': ['H2'], 'C': ['D2'], 'D': ['C2']},
+      );
+      final move = jackarooMovesForCard(s2, 'A', 'S2').single;
+      final r = playJackaroo(
+        s2,
+        playerId: 'A',
+        move: move,
+        random: Random(1),
+        nowMillis: 1,
+      );
+      final board = JackarooBoard.of(r.state);
+      expect(board.pieces['B']![0], h, reason: 'rear wall stone captured');
+      expect(board.pieces['C']![0], 69, reason: 'front stone was protected');
+      expect(r.state.cue!.also, contains('jk_kill'));
+    });
+
+    test('finished player plays on partner stones; team wins at eight', () {
+      const h = jackarooHome;
+      // A is done (all four safe); C (partner) has one stone on the track.
+      final s = jkTeam(
+        pieces: {
+          'A': [76, 77, 78, 79],
+          'B': [h, h, h, h],
+          'C': [10, h, h, h],
+          'D': [h, h, h, h],
+        },
+        hands: {'A': ['S5'], 'B': ['H2'], 'C': ['D2'], 'D': ['C2']},
+      );
+      final moves = jackarooMovesForCard(s, 'A', 'S5');
+      expect(moves.single.owner, 'C', reason: 'plays on partner stones');
+      final r = playJackaroo(
+        s,
+        playerId: 'A',
+        move: moves.single,
+        random: Random(1),
+        nowMillis: 1,
+      );
+      expect(r.error, isNull);
+      expect(JackarooBoard.of(r.state).pieces['C']![0], 15);
+      expect(r.state.status, 'playing', reason: 'one finisher is not a win');
+      expect(r.state.cue!.also, contains('jk_partner_control'));
+
+      // A finishes alone: match continues, the table hears the announcement.
+      final s2 = jkTeam(
+        pieces: {
+          'A': [75, 77, 78, 79],
+          'B': [h, h, h, h],
+          'C': [10, h, h, h],
+          'D': [h, h, h, h],
+        },
+        hands: {'A': ['S1'], 'B': ['H2'], 'C': ['D2'], 'D': ['C2']},
+      );
+      final walk = jackarooMovesForCard(s2, 'A', 'S1')
+          .firstWhere((m) => m.kind == 'forward');
+      final r2 = playJackaroo(
+        s2,
+        playerId: 'A',
+        move: walk,
+        random: Random(1),
+        nowMillis: 1,
+      );
+      expect(r2.state.status, 'playing');
+      expect(
+        '${r2.state.board['text']}',
+        contains('أنهى حجاره وصار يلعب بحجارة شريكه'),
+      );
+
+      // Partner completes the eight: the team wins.
+      final s3 = jkTeam(
+        pieces: {
+          'A': [76, 77, 78, 79],
+          'B': [h, h, h, h],
+          'C': [75, 77, 78, 79],
+          'D': [h, h, h, h],
+        },
+        hands: {'A': ['S1'], 'B': ['H2'], 'C': ['D2'], 'D': ['C2']},
+      );
+      final home = jackarooMovesForCard(s3, 'A', 'S1')
+          .firstWhere((m) => m.kind == 'forward');
+      final r3 = playJackaroo(
+        s3,
+        playerId: 'A',
+        move: home,
+        random: Random(1),
+        nowMillis: 1,
+      );
+      expect(r3.state.status, 'finished');
+      expect('${r3.state.board['text']}', contains('فاز فريق'));
+    });
+
         test('normal king walk is not offered; complex 5 cannot home an enemy', () {
       const h = jackarooHome;
       final normal = jk(a: [10, h, h, h], b: [h, h, h, h], handA: ['S13']);
