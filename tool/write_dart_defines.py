@@ -14,13 +14,8 @@ if p.exists() and "CFBundleShortVersionString" not in p.read_text("utf-8"): p.wr
 p = Path("lib/main.dart")
 if p.exists() and "milliseconds: 2200" not in p.read_text("utf-8"): p.write_text(p.read_text("utf-8").replace("ok = await _reachServers().timeout(const Duration(seconds: 30));", "await Future<void>.delayed(const Duration(milliseconds: 2200)); ok = await _reachServers().timeout(const Duration(seconds: 30));"), "utf-8")
 
-p = Path("lib/services/sounds.dart")
-ctx_code = "SoundBoard() { unawaited(_initCtx()); }\n  static final AudioContext _ctx = AudioContext(iOS: AudioContextIOS(category: AVAudioSessionCategory.playback, options: const {AVAudioSessionOptions.mixWithOthers}), android: const AudioContextAndroid(isSpeakerphoneOn: false, stayAwake: false, contentType: AndroidContentType.sonification, usageType: AndroidUsageType.assistanceSonification, audioFocus: AndroidAudioFocus.none));\n  Future<void> _initCtx() async { try { await AudioPlayer.global.setAudioContext(_ctx); await _a.setAudioContext(_ctx); await _b.setAudioContext(_ctx); await _loop.setAudioContext(_ctx); } catch (_) {} }\n  final AudioPlayer _a = AudioPlayer();"
-if p.exists() and "_initCtx" not in p.read_text("utf-8"): p.write_text(p.read_text("utf-8").replace("final AudioPlayer _a = AudioPlayer();", ctx_code, 1).replace("await _loop.play(AssetSource(_asset(name)));", "await _initCtx(); await _loop.play(AssetSource(_asset(name)), volume: 1.0);").replace("await player.play(AssetSource(_asset(name)));", "await AudioPlayer.global.setAudioContext(_ctx); await player.setAudioContext(_ctx); await player.play(AssetSource(_asset(name)), volume: 1.0);"), "utf-8")
-
-p = Path("lib/services/speech.dart")
-tts_code = "await _tts!.setLanguage('ar-SA'); try { await _tts!.setSharedInstance(true); await _tts!.setIosAudioCategory(IosTextToSpeechAudioCategory.playback, const [IosTextToSpeechAudioCategoryOptions.mixWithOthers, IosTextToSpeechAudioCategoryOptions.defaultToSpeaker, IosTextToSpeechAudioCategoryOptions.allowBluetooth, IosTextToSpeechAudioCategoryOptions.allowBluetoothA2DP], IosTextToSpeechAudioMode.voicePrompt); } catch (_) {}"
-if p.exists() and "setIosAudioCategory" not in p.read_text("utf-8"): p.write_text(p.read_text("utf-8").replace("await _tts!.setLanguage('ar-SA');", tts_code, 1), "utf-8")
+# Sound and TTS session policy now lives in source (audio_policy.dart).
+# Never inject a fixed playback category into generated voice builds.
 
 p = Path("ios/Runner/AppDelegate.swift")
 if p.exists() and "AVAudioSession" not in p.read_text("utf-8"): p.write_text("import AVFoundation\n" + p.read_text("utf-8").replace("GeneratedPluginRegistrant.register(with: self)", "do { try AVAudioSession.sharedInstance().setCategory(.playback, mode: .default, options: [.mixWithOthers]); try AVAudioSession.sharedInstance().setActive(true) } catch {}; GeneratedPluginRegistrant.register(with: self)", 1), "utf-8")
