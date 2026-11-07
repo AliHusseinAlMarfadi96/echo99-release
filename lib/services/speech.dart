@@ -1,4 +1,6 @@
 import 'package:flutter/semantics.dart';
+import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_tts/flutter_tts.dart';
 
@@ -45,6 +47,43 @@ class Speech {
       );
       await _tts?.speak(text);
     } catch (_) {}
+  }
+
+  /// iOS VoiceOver supplies an actual announcement-finished callback.
+  /// Other screen readers expose submission only; never claim their speech
+  /// completed from the Semantics future alone.
+  Future<void> ordered(String text, {required bool useInternalTts}) async {
+    if (useInternalTts) {
+      await say(text, useInternalTts: true);
+      return;
+    }
+    if (!kIsWeb && defaultTargetPlatform == TargetPlatform.iOS) {
+      try {
+        await const MethodChannel('echo99/speech_completion')
+            .invokeMethod<void>('announce', text)
+            .timeout(
+              const Duration(seconds: 90),
+              onTimeout: () async {
+                await cancelOrdered();
+              },
+            );
+        return;
+      } on MissingPluginException {
+        // Non-iOS test hosts and older app shells.
+      }
+    }
+    announce(text);
+  }
+
+  Future<void> cancelOrdered() async {
+    if (!kIsWeb && defaultTargetPlatform == TargetPlatform.iOS) {
+      try {
+        await const MethodChannel('echo99/speech_completion')
+            .invokeMethod<void>('cancel');
+      } on MissingPluginException {
+        // No native speech callback is pending on this platform.
+      }
+    }
   }
 
   void announce(String text) {
