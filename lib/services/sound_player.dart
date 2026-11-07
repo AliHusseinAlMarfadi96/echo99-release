@@ -27,7 +27,11 @@ abstract class SoundPlayer {
 
 /// Supported activation opt-out: this player never owns the RTC session.
 /// Audio interruption/noisy-route handling remains enabled in just_audio.
-class ManagedSoundPlayer implements SoundPlayer {
+abstract class SequenceSoundPlayer implements SoundPlayer {
+  Future<void> playAssets(List<String> paths);
+}
+
+class ManagedSoundPlayer implements SequenceSoundPlayer {
   ManagedSoundPlayer({Future<void> Function()? prepareSession})
     : _prepareSession = prepareSession ?? prepareIdleSoundSession;
   final Future<void> Function() _prepareSession;
@@ -58,6 +62,38 @@ class ManagedSoundPlayer implements SoundPlayer {
       stage = 'play';
       SoundDiagnostics.lastFailure.value = null;
       // play completes on stop/end, not at playback start.
+      // Native play resolves on playlist completion or stop and propagates
+      // playback failures. Do not swallow errors and wait for a false finish.
+      await _player.play();
+    } catch (error) {
+      SoundDiagnostics.record(stage, error);
+      rethrow;
+    }
+  }
+
+  /// Preload one native playlist so short movement beats do not wait for a
+  /// separate Dart load/start round trip on every square.
+  @override
+  Future<void> playAssets(List<String> paths) async {
+    final generation = ++_generation;
+    if (_disposed) return;
+    try {
+      await _prepareSession();
+      if (_disposed || generation != _generation) return;
+      await _player.setLoopMode(ja.LoopMode.off);
+      await _player.setAudioSources([
+        for (final path in paths)
+          if (path == 'sounds/jk_burn_cards.mp3')
+            ja.ClippingAudioSource(
+              child: ja.AudioSource.asset('assets/$path'),
+              start: Duration.zero,
+              end: const Duration(milliseconds: 752),
+            )
+          else
+            ja.AudioSource.asset('assets/$path'),
+      ]);
+      if (_disposed || generation != _generation) return;
+      SoundDiagnostics.lastFailure.value = null;
       unawaited(
         _player.play().catchError((Object error) {
           if (!_disposed && generation == _generation) {
@@ -66,7 +102,7 @@ class ManagedSoundPlayer implements SoundPlayer {
         }),
       );
     } catch (error) {
-      SoundDiagnostics.record(stage, error);
+      SoundDiagnostics.record('asset-load', error);
       rethrow;
     }
   }
