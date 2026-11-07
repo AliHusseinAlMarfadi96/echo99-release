@@ -49,16 +49,17 @@ int sequenceLengthMs(List<ScheduledClip> plan) {
   return last.startMs + (soundDurationsMs[last.name] ?? 0);
 }
 
+class PresentationCancelled implements Exception {}
+
 class SoundBoard {
-  SoundBoard({SoundPlayer Function()? playerFactory, int Function()? nowMillis})
-    : _playerFactory = playerFactory ?? ManagedSoundPlayer.new,
-      _nowMillis = nowMillis ?? (() => DateTime.now().millisecondsSinceEpoch) {
+  SoundBoard({SoundPlayer Function()? playerFactory})
+    : _playerFactory = playerFactory ?? ManagedSoundPlayer.new {
     _a = _playerFactory();
     _b = _playerFactory();
     _loop = _playerFactory();
   }
   final SoundPlayer Function() _playerFactory;
-  final int Function() _nowMillis;
+
   late final SoundPlayer _a;
   late final SoundPlayer _b;
   late final SoundPlayer _loop;
@@ -69,10 +70,11 @@ class SoundBoard {
   final List<SoundPlayer> _layers = [];
   var _flip = false;
   var _disposed = false;
+  int _presentationGeneration = 0;
+  Completer<void> _cancelPresentation = Completer<void>();
 
   /// Game sequences are queued so two table updates never overlap.
   Future<void> _queue = Future<void>.value();
-  int _queuedUntil = 0;
 
   /// Playable event names (asset path without `.mp3`). `boot_unused` is
   /// shipped and never played.
@@ -118,63 +120,66 @@ class SoundBoard {
   /// Kept for older call sites: plays the clips in sequence (never layered).
   Future<void> playAll(List<String> names) => playSequence(names);
 
-  Future<void> _fire(String name) async {
+  /// Runs one game presentation atomically: movement, result, then turn.
+  /// Other game presentations cannot start halfway through this callback.
+  Future<void> present(Future<void> Function() action) {
+    final generation = _presentationGeneration;
+    final run = _queue.then((_) async {
+      if (_disposed || generation != _presentationGeneration) return;
+      await action();
+    });
+    _queue = run.catchError((_) {});
+    return run;
+  }
+
+  /// Native completion, not a duration estimate, advances the game queue.
+  /// A missing completion times out as a failure, never as successful playback.
+  Future<void> playNow(List<String> names) async {
     if (_disposed) return;
+    final valid = [
+      for (final n in names)
+        if (events.contains(n)) n,
+    ];
+    if (valid.isEmpty) return;
     final player = _playerFactory();
     _layers.add(player);
-    player.completed.listen((_) {
-      _layers.remove(player);
-      unawaited(player.dispose());
-    });
     try {
-      await _initCtx();
-      await player.playAsset(_asset(name));
-    } catch (_) {
+      if (player is SequenceSoundPlayer) {
+        await Future.any([
+          player.playAssets([for (final n in valid) _asset(n)]),
+          _cancelPresentation.future.then<void>(
+            (_) => throw PresentationCancelled(),
+          ),
+        ]).timeout(const Duration(minutes: 5));
+      } else {
+        for (final name in valid) {
+          if (_disposed) return;
+          final done = player.completed.first;
+          await player.playAsset(_asset(name));
+          await Future.any([
+            done,
+            _cancelPresentation.future.then<void>(
+              (_) => throw PresentationCancelled(),
+            ),
+          ]).timeout(const Duration(minutes: 5));
+        }
+      }
+    } catch (error) {
+      if (!_disposed && error is! PresentationCancelled) {
+        SoundDiagnostics.record('sequence', error);
+      }
+      rethrow;
+    } finally {
       _layers.remove(player);
       await player.dispose();
     }
   }
 
-  /// Plays clips one after another without overlap (see [planSequence]).
-  /// A new sequence waits for the previous one to finish.
+  /// Native playlist moves directly between clips, without artificial gaps.
   Future<void> playSequence(
     List<String> names, {
     Duration gap = const Duration(milliseconds: 250),
-  }) {
-    final plan = planSequence([
-      for (final n in names)
-        if (events.contains(n)) n,
-    ], gapMs: gap.inMilliseconds);
-    if (plan.isEmpty) {
-      return Future<void>.value();
-    }
-    final now = _nowMillis();
-    // Keep the current chain intact. Resetting it while a long clip is
-    // still running allowed later sequences to overlap that clip.
-    final length = sequenceLengthMs(plan);
-    _queuedUntil = (_queuedUntil > now ? _queuedUntil : now) + length + 60;
-    final run = _queue.then((_) async {
-      final start = _nowMillis();
-      for (final clip in plan) {
-        final wait = start + clip.startMs - _nowMillis();
-        if (wait > 0) {
-          await Future<void>.delayed(Duration(milliseconds: wait));
-        }
-        unawaited(_fire(clip.name));
-      }
-      final last = plan.last;
-      final tail =
-          start +
-          last.startMs +
-          (soundDurationsMs[last.name] ?? 0) -
-          _nowMillis();
-      if (tail > 0) {
-        await Future<void>.delayed(Duration(milliseconds: tail + 40));
-      }
-    });
-    _queue = run.catchError((_) {});
-    return run;
-  }
+  }) => present(() => playNow(names));
 
   /// Sequential ticks: [sounds] in order, or [sound] repeated [times].
   Future<void> playTicks(
@@ -189,8 +194,21 @@ class SoundBoard {
     return playSequence(list, gap: Duration(milliseconds: gapMs));
   }
 
+  /// Leaving/backgrounding a table must unblock native-completion waits and
+  /// discard stale queued turns, without stopping UI or RTC audio.
+  Future<void> cancelPresentations() async {
+    _presentationGeneration++;
+    final previous = _cancelPresentation;
+    _cancelPresentation = Completer<void>();
+    if (!previous.isCompleted) previous.complete();
+    for (final player in [..._layers]) {
+      await player.stop();
+    }
+  }
+
   Future<void> dispose() async {
     _disposed = true;
+    await cancelPresentations();
     final layers = [..._layers];
     _layers.clear();
     for (final player in layers) {
