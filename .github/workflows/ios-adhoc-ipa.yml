@@ -3,8 +3,8 @@ name: iOS ad-hoc IPA
 on:
   workflow_dispatch:
     inputs:
-      stage_verified_build19:
-        description: Stage exact verified build19 artifact only (no rebuild)
+      stage_verified_build20:
+        description: Stage exact verified build20 artifact only (no rebuild)
         type: boolean
         required: false
         default: false
@@ -16,7 +16,7 @@ permissions:
 
 jobs:
   ipa:
-    if: ${{ inputs.stage_verified_build19 != true }}
+    if: ${{ inputs.stage_verified_build20 != true }}
     runs-on: macos-latest
     timeout-minutes: 30
     steps:
@@ -64,18 +64,18 @@ jobs:
           name: echo99-adhoc-ipa
           path: Echo99.ipa
 
-  stage-verified-build19:
-    if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/repair/build-fix-1.3.2' && inputs.stage_verified_build19 == true }}
+  stage-verified-build20:
+    if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/repair/build-fix-1.3.2' && inputs.stage_verified_build20 == true }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
       actions: read
       contents: write
     concurrency:
-      group: stage-verified-test19
+      group: stage-verified-test20
       cancel-in-progress: false
     steps:
-      - name: Verify and stage existing build19 artifact
+      - name: Verify and stage existing build20 artifact
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -85,13 +85,13 @@ jobs:
           import hashlib,json,subprocess,zipfile,io,plistlib,urllib.parse
           REPO='AliHusseinAlMarfadi96/echo99-release'
           BASE='repos/'+REPO
-          SHA='1b0bcd88d5278cd3fa7e19f8b7a2367249151bd4'
-          RUN=42303353167
-          ART=13544704622
-          RID=437126322
-          TAG='v1.3.4-test.19'
-          NAME='Echo99-1.3.4-build19-1b0bcd8.ipa'
-          HASH='e00c1133479dedea0612cafc30695e293709b8a3dee7d9bea7fed700c17ba7f8'
+          SHA='14d8da73d1f13e9114d3263316880a6be5ba86ad'
+          RUN=42324099479
+          ART=13554501992
+          RID=437242658
+          TAG='v1.3.5-test.20'
+          NAME='Echo99-1.3.5-build20-14d8da7.ipa'
+          HASH='081d0c3ce753ac3b88c4b53bf25d914acedc7b10b39ef768b5185a29e032ee82'
           def api(path):
            return json.loads(subprocess.check_output(['gh','api',BASE+'/'+path]))
           def digest(b): return hashlib.sha256(b).hexdigest()
@@ -99,28 +99,28 @@ jobs:
            if not ok: raise RuntimeError('Verification failed: '+label)
           def fingerprint(r):
            return {k:r.get(k) for k in ['id','tag_name','target_commitish','draft','prerelease','body','published_at','assets']}
-          old={i:fingerprint(api('releases/'+str(i))) for i in [437091336,437021308,435898907]}
+          old={i:fingerprint(api('releases/'+str(i))) for i in [437126322,437091336,437021308,435898907]}
           assert_ok(api('releases/latest')['id']==435898907,'stable latest before')
           r=api('actions/runs/'+str(RUN))
           assert_ok(r['head_sha']==SHA and r['conclusion']=='success' and r['status']=='completed' and r['head_branch']=='repair/build-fix-1.3.2' and r['event']=='workflow_dispatch' and r['path']=='.github/workflows/ios-adhoc-ipa.yml','successful source run')
           a=api('actions/artifacts/'+str(ART))
           assert_ok(a['id']==ART and a['name']=='echo99-adhoc-ipa' and not a['expired'] and a['workflow_run']['id']==RUN and a['workflow_run']['head_sha']==SHA,'artifact identity')
           z=subprocess.check_output(['gh','api',BASE+'/actions/artifacts/'+str(ART)+'/zip'])
-          assert_ok(digest(z)=='d10474a6e93475644813c08ad5be84db9e2379452a00d6c8290f13ad44d9f4ef','artifact archive hash')
+          assert_ok(digest(z)=='c61fc5cdf74ff276b0e125a64cc6be6184bc54dd46e3bd73c3570b2b07dae504','artifact archive hash')
           with zipfile.ZipFile(io.BytesIO(z)) as archive:
            files=[x for x in archive.namelist() if not x.endswith('/')]
            assert_ok(files==['Echo99.ipa'],'exact artifact contents')
            ipa=archive.read('Echo99.ipa')
-          assert_ok(len(ipa)==25676914 and digest(ipa)==HASH,'IPA exact bytes')
+          assert_ok(len(ipa)==25688738 and digest(ipa)==HASH,'IPA exact bytes')
           with zipfile.ZipFile(io.BytesIO(ipa)) as app:
            p=plistlib.loads(app.read('Payload/Runner.app/Info.plist'))
-           assert_ok(p['CFBundleShortVersionString']=='1.3.4' and str(p['CFBundleVersion'])=='19' and p['MinimumOSVersion']=='15.0' and p['CFBundleIdentifier']=='com.echo99.echo99','IPA version')
+           assert_ok(p['CFBundleShortVersionString']=='1.3.5' and str(p['CFBundleVersion'])=='20' and p['MinimumOSVersion']=='15.0' and p['CFBundleIdentifier']=='com.echo99.echo99','IPA version')
            assert_ok('Payload/Runner.app/Frameworks/objective_c.framework/objective_c' in app.namelist(),'native asset retained')
           d=api('releases/'+str(RID))
-          assert_ok(d['draft'] and d['prerelease'] and d['target_commitish']=='repair/build-fix-1.3.2' and not d['assets'] and d['name']=='Echo99 iPhone 1.3.4 Build 19 - Sound Events Test' and SHA in d['body'] and HASH in d['body'],'existing private draft')
-          assert_ok(d['tag_name']=='untagged-6983e0b66e3ce79f8e94' or d['tag_name']==TAG,'draft tag identity')
+          assert_ok(d['draft'] and d['prerelease'] and d['target_commitish']=='repair/build-fix-1.3.2' and not d['assets'] and d['name']=='Echo99 iPhone 1.3.5 Build 20 - Movement and Accessible Table Test' and SHA in d['body'] and HASH in d['body'],'existing private draft')
+          assert_ok(d['tag_name']=='untagged-b6334acbab5631087b03' or d['tag_name']==TAG,'draft tag identity')
           refs=api('git/matching-refs/tags/'+TAG)
-          assert_ok(not refs,'test18 tag must not exist')
+          assert_ok(not refs,'test20 tag must not exist')
           open(NAME,'wb').write(ipa)
           # API upload stays inside this repository runner using its short-lived job token.
           url=d['upload_url'].split('{')[0]+'?name='+urllib.parse.quote(NAME)
