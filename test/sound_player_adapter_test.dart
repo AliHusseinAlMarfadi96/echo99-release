@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:echo99/services/sound_player.dart';
 import 'package:echo99/services/sounds.dart';
@@ -27,6 +28,15 @@ class FakePlayer implements SoundPlayer {
   @override
   Future<void> dispose() async {
     disposed = true;
+  }
+}
+
+class FakeSequencePlayer extends FakePlayer implements SequenceSoundPlayer {
+  final finish = Completer<void>();
+  @override
+  Future<void> playAssets(List<String> paths) async {
+    events.addAll(paths);
+    await finish.future;
   }
 }
 
@@ -136,6 +146,62 @@ void main() {
       unawaited(board.dispose());
       clock.flushMicrotasks();
     });
+  });
+  test(
+    'native sequence future gates result, propagates errors and cleans up',
+    () {
+      fakeAsync((clock) {
+        final players = <FakeSequencePlayer>[];
+        final board = SoundBoard(
+          playerFactory: () {
+            final player = FakeSequencePlayer();
+            players.add(player);
+            return player;
+          },
+        );
+        final events = <String>[];
+        unawaited(
+          board
+              .present(() async {
+                await board.playNow(['card', 'your_turn']);
+                events.add('result');
+              })
+              .catchError((Object e) {
+                events.add('error');
+              }),
+        );
+        clock.flushMicrotasks();
+        expect(players[3].events, ['sounds/card.mp3', 'sounds/your_turn.mp3']);
+        clock.elapse(const Duration(seconds: 20));
+        clock.flushMicrotasks();
+        expect(events, isEmpty);
+        expect(players[3].disposed, false);
+        players[3].finish.completeError(StateError('native play failed'));
+        clock.flushMicrotasks();
+        expect(events, ['error']);
+        expect(players[3].disposed, true);
+        unawaited(
+          board.present(() async {
+            await board.playNow(['card']);
+            events.add('fresh');
+          }),
+        );
+        clock.flushMicrotasks();
+        expect(events, ['error']);
+        players[4].finish.complete();
+        clock.flushMicrotasks();
+        expect(events, ['error', 'fresh']);
+        expect(players[4].disposed, true);
+        unawaited(board.dispose());
+        clock.flushMicrotasks();
+      });
+    },
+  );
+  test('real native adapter awaits play future instead of launch only', () {
+    final source = File('lib/services/sound_player.dart').readAsStringSync();
+    final native = source.substring(source.indexOf('Future<void> playAssets'));
+    expect(native, contains('await _player.play();'));
+    expect(native, isNot(contains('unawaited(')));
   });
   test('failed load does not hang later presentations', () async {
     final players = <FakePlayer>[];
