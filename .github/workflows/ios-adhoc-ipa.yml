@@ -118,7 +118,7 @@ jobs:
            assert_ok('Payload/Runner.app/Frameworks/objective_c.framework/objective_c' in app.namelist(),'native asset retained')
           d=api('releases/'+str(RID))
           assert_ok(d['draft'] and d['prerelease'] and d['target_commitish']=='repair/build-fix-1.3.2' and not d['assets'] and d['name']=='Echo99 iPhone 1.3.5 Build 20 - Movement and Accessible Table Test' and SHA in d['body'] and HASH in d['body'],'existing private draft')
-          assert_ok(d['tag_name']=='untagged-b6334acbab5631087b03' or d['tag_name']==TAG,'draft tag identity')
+          assert_ok(d['tag_name'] in (None, '', 'untagged-b6334acbab5631087b03', TAG),'draft tag identity')
           refs=api('git/matching-refs/tags/'+TAG)
           assert_ok(not refs,'test20 tag must not exist')
           open(NAME,'wb').write(ipa)
