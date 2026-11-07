@@ -20,7 +20,7 @@ const matchWinSound = 'applause';
 const matchLossSound = 'loss2';
 
 /// Clips that may only sound when a player reaches 0 or the match ends.
-const endGameSounds = {matchWinSound, matchLossSound, 'loss1', 'bust99'};
+const endGameSounds = {matchWinSound, matchLossSound, 'loss1'};
 
 /// Card identity clips used for a play with no point change.
 const identitySounds = {'jack', 'three', 'reverse', 'ordinary', 'card'};
@@ -41,50 +41,54 @@ String playSound(String outcome, {String identity = 'card'}) {
   }
 }
 
-/// Every clip a table update should play for [me], in order.
-///
-/// Point events return exactly one clip. Win/loss end clips only appear when
-/// [me] reaches 0 or the match finishes. The cue's stored `also` list is not
-/// trusted for point sounds, so a table written by an older build cannot
-/// layer laughter on top of a point sound.
+/// Per-listener round outcome, then a separate final-match outcome.
 List<String> tableSounds({
   required MatchState? prev,
   required MatchState next,
   required String me,
 }) {
-  if (prev == null) {
-    return const [];
-  }
-  if (next.status == 'finished' && prev.status != 'finished') {
-    return [playerWonMatch(next, me) ? matchWinSound : matchLossSound];
-  }
-  final before = {for (final seat in prev.players) seat.id: seat.points};
-  final zeroed = <String>{
-    for (final seat in next.players)
-      if ((before[seat.id] ?? 0) > 0 && seat.points <= 0) seat.id,
-  };
-  if (zeroed.contains(me)) {
-    return const [matchLossSound];
-  }
+  if (prev == null) return const [];
   final cue = next.cue;
-  if (cue == null || cue.nonce == prev.cue?.nonce) {
-    return zeroed.isEmpty ? const [] : const [eliminatedSound];
-  }
-  if (cue.type == 'shuffle') {
-    return const ['deal'];
-  }
-  if (zeroed.isNotEmpty) {
-    return const [eliminatedSound];
-  }
+  if (cue == null || cue.nonce == prev.cue?.nonce) return const [];
   final play = next.lastPlay;
   final fresh = play != null && play.nonce == cue.nonce;
-  final outcome = fresh ? play.outcome : 'neutral';
-  final identity = cue.also.firstWhere(
-    identitySounds.contains,
-    orElse: () => 'card',
+  final before = {for (final seat in prev.players) seat.id: seat.points};
+  final lost = next.players.any(
+    (s) => s.id == me && s.points < (before[me] ?? s.points),
   );
-  return [
-    playSound(outcome, identity: identity),
-    if (fresh && play.redealt) 'deal',
-  ];
+  final actor = prev.current?.id == me;
+  final clips = <String>[];
+  if (fresh && (play.outcome == 'exact99' || play.outcome == 'bust')) {
+    // Original rules identify who loses points. The winner's named metal
+    // and the loser's named glass are round clips, not match celebration.
+    if (lost) {
+      clips.add('bust99');
+    } else if (play.outcome == 'exact99' && actor ||
+        play.outcome == 'bust' && !actor) {
+      clips.add(exact99Sound);
+    }
+  } else if (cue.type == 'shuffle') {
+    clips.add('deal');
+  } else {
+    final identity = cue.also.firstWhere(
+      identitySounds.contains,
+      orElse: () => 'card',
+    );
+    clips.add(playSound(fresh ? play.outcome : 'neutral', identity: identity));
+  }
+  final ended = next.status == 'finished' && prev.status != 'finished';
+  final zeroedMe = next.players.any(
+    (s) => s.id == me && s.points <= 0 && (before[me] ?? 0) > 0,
+  );
+  if (ended) {
+    clips.add(playerWonMatch(next, me) ? matchWinSound : matchLossSound);
+  } else if (zeroedMe) {
+    clips.add(matchLossSound);
+  } else if (next.players.any(
+    (s) => s.points <= 0 && (before[s.id] ?? 0) > 0,
+  )) {
+    clips.add(eliminatedSound);
+  }
+  if (fresh && play.redealt && !ended) clips.add('deal');
+  return clips;
 }
