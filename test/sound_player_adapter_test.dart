@@ -58,64 +58,96 @@ void main() {
       expect(players[0].events.length, 2);
     },
   );
-  test(
-    'long sequence queue never resets into overlap; completion disposes layer',
-    () {
-      fakeAsync((clock) {
-        final players = <FakePlayer>[];
-        final board = SoundBoard(
-          nowMillis: () => clock.elapsed.inMilliseconds,
-          playerFactory: () {
-            final p = FakePlayer();
-            players.add(p);
-            return p;
-          },
-        );
-        unawaited(board.playSequence(['applause', 'card']));
-        unawaited(board.playSequence(['alert']));
-        clock.flushMicrotasks();
-        expect(players.length, 4);
-        expect(players[3].events, ['sounds/applause.mp3:false']);
-        clock.elapse(const Duration(seconds: 6));
-        clock.flushMicrotasks();
-        expect(players.length, 4); // Do not start card/alert over applause.
-        clock.elapse(const Duration(milliseconds: 400));
-        clock.flushMicrotasks();
-        expect(players[4].events, ['sounds/card.mp3:false']);
-        players[3].end.add(null);
-        clock.flushMicrotasks();
-        expect(players[3].disposed, true);
-        clock.elapse(const Duration(seconds: 2));
-        clock.flushMicrotasks();
-        expect(players[5].events, ['sounds/alert.mp3:false']);
-        unawaited(board.dispose());
-        clock.flushMicrotasks();
-        expect(players.every((p) => p.disposed), true);
-      });
-    },
-  );
-  test(
-    'failed layer load disposes; pending sequence does not fire after dispose',
-    () {
-      fakeAsync((clock) {
-        final players = <FakePlayer>[];
-        final board = SoundBoard(
-          nowMillis: () => clock.elapsed.inMilliseconds,
-          playerFactory: () {
-            final p = FakePlayer()..fail = players.length >= 3;
-            players.add(p);
-            return p;
-          },
-        );
-        unawaited(board.playSequence(['card', 'alert']));
-        clock.flushMicrotasks();
-        expect(players[3].disposed, true);
-        unawaited(board.dispose());
-        clock.flushMicrotasks();
-        clock.elapse(const Duration(seconds: 3));
-        clock.flushMicrotasks();
-        expect(players.length, 4);
-      });
-    },
-  );
+  test('native completion gates the next clip and whole presentation', () {
+    fakeAsync((clock) {
+      final players = <FakePlayer>[];
+      final board = SoundBoard(
+        playerFactory: () {
+          final p = FakePlayer();
+          players.add(p);
+          return p;
+        },
+      );
+      final order = <String>[];
+      unawaited(
+        board.present(() async {
+          await board.playNow(['applause', 'card']);
+          order.add('result');
+          await board.playNow(['your_turn']);
+        }),
+      );
+      unawaited(board.playSequence(['alert']));
+      clock.flushMicrotasks();
+      expect(players[3].events, ['sounds/applause.mp3:false']);
+      clock.elapse(const Duration(seconds: 10));
+      clock.flushMicrotasks();
+      expect(players.length, 4); // elapsed estimates never mean completed
+      players[3].end.add(null);
+      clock.flushMicrotasks();
+      expect(players[3].events.last, 'sounds/card.mp3:false');
+      expect(order, isEmpty);
+      players[3].end.add(null);
+      clock.flushMicrotasks();
+      expect(order, ['result']);
+      expect(players[4].events, ['sounds/your_turn.mp3:false']);
+      players[4].end.add(null);
+      clock.flushMicrotasks();
+      expect(players[5].events, ['sounds/alert.mp3:false']);
+      players[5].end.add(null);
+      clock.flushMicrotasks();
+      unawaited(board.dispose());
+      clock.flushMicrotasks();
+      expect(players.every((p) => p.disposed), true);
+    });
+  });
+  test('cancel during native completion unblocks and drops queued turns', () {
+    fakeAsync((clock) {
+      final players = <FakePlayer>[];
+      final board = SoundBoard(
+        playerFactory: () {
+          final p = FakePlayer();
+          players.add(p);
+          return p;
+        },
+      );
+      final completed = <String>[];
+      unawaited(
+        board.playSequence(['card']).catchError((Object e) {
+          completed.add('cancelled');
+        }),
+      );
+      unawaited(
+        board.present(() async {
+          completed.add('stale');
+        }),
+      );
+      clock.flushMicrotasks();
+      unawaited(board.cancelPresentations());
+      clock.flushMicrotasks();
+      expect(completed, ['cancelled']);
+      expect(players[3].disposed, true);
+      unawaited(
+        board.present(() async {
+          completed.add('fresh');
+        }),
+      );
+      clock.flushMicrotasks();
+      expect(completed, ['cancelled', 'fresh']);
+      unawaited(board.dispose());
+      clock.flushMicrotasks();
+    });
+  });
+  test('failed load does not hang later presentations', () async {
+    final players = <FakePlayer>[];
+    final board = SoundBoard(
+      playerFactory: () {
+        final p = FakePlayer()..fail = true;
+        players.add(p);
+        return p;
+      },
+    );
+    await expectLater(board.playSequence(['card']), throwsStateError);
+    expect(players.last.disposed, true);
+    await board.dispose();
+  });
 }
