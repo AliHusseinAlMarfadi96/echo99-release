@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../echo_scope.dart';
+import '../app_version.dart';
 import '../services/doc_id.dart';
 import '../services/sound_player.dart';
 
@@ -49,7 +50,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             },
           ),
           const SizedBox(height: 12),
-          const Text('نسخة اختبار 1.3.3 (18)'),
+          const Text('نسخة اختبار $appVersion ($appBuild)'),
           OutlinedButton(
             onPressed: () async {
               await EchoScope.of(context).sounds.play('connected');
