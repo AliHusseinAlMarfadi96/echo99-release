@@ -94,13 +94,7 @@ class ManagedSoundPlayer implements SequenceSoundPlayer {
       ]);
       if (_disposed || generation != _generation) return;
       SoundDiagnostics.lastFailure.value = null;
-      unawaited(
-        _player.play().catchError((Object error) {
-          if (!_disposed && generation == _generation) {
-            SoundDiagnostics.record('play', error);
-          }
-        }),
-      );
+      await _player.play();
     } catch (error) {
       SoundDiagnostics.record('asset-load', error);
       rethrow;
