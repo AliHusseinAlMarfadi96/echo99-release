@@ -1,3 +1,9 @@
+import 'dart:async';
+
+import 'package:echo99/services/speech.dart';
+import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
+
 import 'dart:io';
 
 import 'package:echo99/app_version.dart';
@@ -7,6 +13,42 @@ import 'package:echo99/services/game_presentation.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  TestWidgetsFlutterBinding.ensureInitialized();
+  test(
+    'ordered iOS narration waits for native callback and cancellation',
+    () async {
+      debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
+      addTearDown(() => debugDefaultTargetPlatformOverride = null);
+      final finished = Completer<void>();
+      var cancelled = false;
+      const channel = MethodChannel('echo99/speech_completion');
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(channel, (call) async {
+            if (call.method == 'announce') await finished.future;
+            if (call.method == 'cancel') {
+              cancelled = true;
+              finished.complete();
+            }
+            return null;
+          });
+      addTearDown(
+        () => TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+            .setMockMethodCallHandler(channel, null),
+      );
+      final speech = Speech();
+      var complete = false;
+      final pending = speech.ordered('result', useInternalTts: false).then((_) {
+        complete = true;
+      });
+      await Future<void>.delayed(Duration.zero);
+      expect(complete, false);
+      await speech.cancelOrdered();
+      await pending;
+      expect(cancelled, true);
+      expect(complete, true);
+    },
+  );
+
   test('red and green keep one distinct forward and backward timbre', () {
     expect(jackarooStepSounds(4, colorIndex: 0), List.filled(4, 'jk_step1'));
     expect(jackarooStepSounds(4, colorIndex: 2), List.filled(4, 'jk_step2'));
