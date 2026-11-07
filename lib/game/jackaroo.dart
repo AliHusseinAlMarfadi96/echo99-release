@@ -206,18 +206,15 @@ class JackarooStep {
   final List<(String, int)> kills;
 }
 
-/// Team 1 (Red/Green) pulses with dice_move, Team 2 (Blue/Yellow) with
-/// move; backward steps alternate step_back 1 / step_back 2.
+/// Two supplied movement timbres, stable for the whole move. Red and green
+/// face each other in two-player games. Only two timbres were supplied.
 List<String> jackarooStepSounds(int steps, {required int colorIndex}) {
   final n = steps.abs().clamp(1, 20);
-  final forward = colorIndex % 2 == 0 ? 'jk_step1' : 'jk_step2';
-  return [
-    for (var i = 0; i < n; i++)
-      if (steps > 0)
-        forward
-      else
-        (i.isEven ? 'jk_step_back1' : 'jk_step_back2'),
-  ];
+  final second = colorIndex != 0;
+  final clip = steps > 0
+      ? (second ? 'jk_step2' : 'jk_step1')
+      : (second ? 'jk_step_back2' : 'jk_step_back1');
+  return List.filled(n, clip);
 }
 
 /// Clip when a card / action starts (TableEx «dice_roll»).
@@ -295,6 +292,7 @@ JackarooStep? jackarooAdvance(
   final occ = board.occupancy();
   final myColor = board.colors[owner];
   final kills = <(String, int)>[];
+  final captureSquares = <int, List<(String, int)>>{};
   final dir = steps > 0 ? 1 : -1;
   for (var q = start + dir; dir > 0 ? q <= target : q >= target; q += dir) {
     final last = q == target;
@@ -320,6 +318,7 @@ JackarooStep? jackarooAdvance(
       // Complex king sweep returns EVERY stone on its path, including the
       // player's own and the partner's, and breaks walls (rules PDF).
       kills.add(hit);
+      captureSquares.putIfAbsent(q, () => []).add(hit);
       continue;
     }
     if (board.wallFront(occ, abs)) {
@@ -329,6 +328,7 @@ JackarooStep? jackarooAdvance(
       // Landing kills whatever sits there — opponent, partner, or the
       // player's own stone (rules PDF: capture does not distinguish colors).
       kills.add(hit);
+      captureSquares.putIfAbsent(q, () => []).add(hit);
       continue;
     }
     if (hit.$1 == owner || board.colors[hit.$1] == myColor) {
@@ -341,20 +341,25 @@ JackarooStep? jackarooAdvance(
     next.pieces[kill.$1]![kill.$2] = jackarooHome;
   }
   next.pieces[owner]![index] = target;
-  final sounds = jackarooStepSounds(
+  final pulses = jackarooStepSounds(
     steps,
     colorIndex: board.colors[owner] ?? 0,
   );
-  // One landing clip after the last step (never replaces a step pulse).
-  if (kills.isNotEmpty) {
-    // Returning your own or your partner's stone has its own clip, distinct
-    // from capturing an opponent (rules PDF).
-    final friendly = isFriendly ?? ((victim) => victim == owner);
-    sounds.add(kills.any((k) => friendly(k.$1)) ? 'jk_kill_own' : 'jk_kill');
-  } else if (target >= jackarooTrack && start < jackarooTrack) {
-    sounds.add('jk_safe_enter');
-  } else {
-    sounds.add('jk_marble_land');
+  final friendly = isFriendly ?? ((victim) => victim == owner);
+  final sounds = <String>[];
+  for (var i = 0; i < pulses.length; i++) {
+    sounds.add(pulses[i]);
+    final q = start + (i + 1) * dir;
+    for (final kill in captureSquares[q] ?? const <(String, int)>[]) {
+      sounds.add(friendly(kill.$1) ? 'jk_kill_own' : 'jk_kill');
+    }
+  }
+  if (kills.isEmpty) {
+    sounds.add(
+      target >= jackarooTrack && start < jackarooTrack
+          ? 'jk_safe_enter'
+          : 'jk_marble_land',
+    );
   }
   return JackarooStep(next, sounds, '', kills);
 }
@@ -523,8 +528,7 @@ List<JackarooMove> jackarooMovesForCard(
   }
   if (rank == 4) {
     for (var i = 0; i < mine.length; i++) {
-      if (jackarooAdvance(board, playAs, i, -4, isFriendly: friendly) !=
-          null) {
+      if (jackarooAdvance(board, playAs, i, -4, isFriendly: friendly) != null) {
         moves.add(
           JackarooMove(
             card: card,
@@ -540,8 +544,7 @@ List<JackarooMove> jackarooMovesForCard(
   }
   if (rank == 7) {
     for (var i = 0; i < mine.length; i++) {
-      if (jackarooAdvance(board, playAs, i, 7, isFriendly: friendly) !=
-          null) {
+      if (jackarooAdvance(board, playAs, i, 7, isFriendly: friendly) != null) {
         moves.add(
           JackarooMove(
             card: card,
@@ -553,7 +556,13 @@ List<JackarooMove> jackarooMovesForCard(
         );
       }
       for (var a = 1; a <= 6; a++) {
-        final first = jackarooAdvance(board, playAs, i, a, isFriendly: friendly);
+        final first = jackarooAdvance(
+          board,
+          playAs,
+          i,
+          a,
+          isFriendly: friendly,
+        );
         if (first == null) {
           continue;
         }
@@ -561,8 +570,13 @@ List<JackarooMove> jackarooMovesForCard(
           if (j == i) {
             continue;
           }
-          if (jackarooAdvance(first.board, playAs, j, 7 - a,
-                  isFriendly: friendly) !=
+          if (jackarooAdvance(
+                first.board,
+                playAs,
+                j,
+                7 - a,
+                isFriendly: friendly,
+              ) !=
               null) {
             moves.add(
               JackarooMove(
@@ -601,8 +615,14 @@ List<JackarooMove> jackarooMovesForCard(
             list[i] + steps >= jackarooTrack) {
           continue;
         }
-        if (jackarooAdvance(board, who, i, steps,
-                kingSweep: sweep, isFriendly: friendly) !=
+        if (jackarooAdvance(
+              board,
+              who,
+              i,
+              steps,
+              kingSweep: sweep,
+              isFriendly: friendly,
+            ) !=
             null) {
           moves.add(
             JackarooMove(
@@ -648,10 +668,8 @@ List<JackarooMove> jackarooLegalMoves(MatchState state, String owner) {
     // track another player may open the path, so one chosen card burns and
     // the turn passes.
     final playAs = jackarooPlayAs(state, owner);
-    final allInBase =
-        (JackarooBoard.of(state).pieces[playAs] ?? const <int>[]).every(
-          (piece) => piece == jackarooHome,
-        );
+    final allInBase = (JackarooBoard.of(state).pieces[playAs] ?? const <int>[])
+        .every((piece) => piece == jackarooHome);
     if (allInBase) {
       return [JackarooMove(card: hand.first, kind: 'burnAll', owner: owner)];
     }
@@ -718,7 +736,6 @@ String jackarooKillSuffix(MatchState state, List<(String, int)> kills) {
   return '، ${parts.join('، ')}';
 }
 
-
 /// After [move], names the nearest stone ahead of and behind the moved
 /// piece with track distances (rules text: the player must hear who will be
 /// ahead of them and who behind after the move, and by how many squares).
@@ -745,12 +762,7 @@ String jackarooContextSuffix(MatchState state, JackarooMove move) {
       final first = jackarooAdvance(board, move.owner, move.piece, move.steps);
       final second = first == null
           ? null
-          : jackarooAdvance(
-              first.board,
-              move.owner2,
-              move.piece2,
-              move.steps2,
-            );
+          : jackarooAdvance(first.board, move.owner2, move.piece2, move.steps2);
       after = second?.board;
       who = move.owner2;
       index = move.piece2;
@@ -793,9 +805,7 @@ String jackarooContextSuffix(MatchState state, JackarooMove move) {
   for (var d = 1; d < jackarooTrack && (ahead == null || behind == null); d++) {
     if (ahead == null) {
       final hit = occ[(meAbs + d) % jackarooTrack];
-      if (hit != null &&
-          hit != behind &&
-          (hit.$1 != who || hit.$2 != index)) {
+      if (hit != null && hit != behind && (hit.$1 != who || hit.$2 != index)) {
         ahead = hit;
         aheadDist = d;
       }
@@ -949,6 +959,14 @@ Map<String, List<String>> _dealJackaroo(
   return hands;
 }
 
+String _positionLabel(JackarooBoard board, String owner, int progress) {
+  if (progress == jackarooHome) return 'البيت';
+  if (progress >= jackarooTrack) {
+    return 'الأمان ${progress - jackarooTrack + 1}';
+  }
+  return 'الخانة ${board.absolute(owner, progress)}';
+}
+
 /// Applies [move] for [playerId]. The move must be one of
 /// [jackarooLegalMoves]; anything else is rejected.
 EngineResult playJackaroo(
@@ -1064,6 +1082,33 @@ EngineResult playJackaroo(
         sounds.add('jk_partner_control');
       }
       text = '${seat.name} حرّك قطعة ${move.steps} خطوات';
+  }
+  if (const {'forward', 'back', 'split'}.contains(move.kind)) {
+    String moved(String owner, int piece) {
+      final before = startingBoard.pieces[owner]![piece];
+      final after = board.pieces[owner]![piece];
+      return '${jackarooPieceLabel(state, owner, piece)} من '
+          '${_positionLabel(startingBoard, owner, before)} إلى '
+          '${_positionLabel(board, owner, after)}';
+    }
+
+    final moves = [
+      moved(move.owner, move.piece),
+      if (move.kind == 'split') moved(move.owner2, move.piece2),
+    ];
+    final returned = <String>[];
+    for (final entry in startingBoard.pieces.entries) {
+      for (var i = 0; i < entry.value.length; i++) {
+        if (entry.value[i] != jackarooHome &&
+            board.pieces[entry.key]![i] == jackarooHome) {
+          returned.add(
+            'تم إعادة ${jackarooPieceLabel(state, entry.key, i)} إلى بيته',
+          );
+        }
+      }
+    }
+    text = '${seat.name}: انتقل ${moves.join('، ')}';
+    if (returned.isNotEmpty) text += '. ${returned.join('، ')}';
   }
   if (move.kind != 'burnAll') {
     mine.remove(move.card);
