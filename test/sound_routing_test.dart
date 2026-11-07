@@ -58,7 +58,6 @@ void main() {
     expect(clips, isNot(contains('loss1')));
     expect(clips, isNot(contains('loss2')));
     expect(clips, isNot(contains('applause')));
-    expect(clips, isNot(contains('bust99')));
   }
 
   test('crossing 33 upward plays exactly the point-loss sound', () {
@@ -114,7 +113,7 @@ void main() {
     expect(tableSounds(prev: on66, next: next66, me: 'a'), [pointGainSound]);
   });
 
-  test('a two-point bust past 99 has no laughter, glass, or applause', () {
+  test('bust round uses glass for point loser and metal for other players', () {
     final before = table(
       players: [a, b],
       hands: {
@@ -126,7 +125,11 @@ void main() {
     expect(after.players.first.points, 7);
     final clips = tableSounds(prev: before, next: after, me: 'a');
     // Bust costs 2 points and (per PDF) redeals — penalty plus the deal.
-    expect(clips, [pointLossSound, 'deal']);
+    expect(clips, ['bust99', 'deal']);
+    expect(tableSounds(prev: before, next: after, me: 'b'), [
+      exact99Sound,
+      'deal',
+    ]);
     expectNoEndGame(clips);
   });
 
@@ -143,6 +146,27 @@ void main() {
     final clips = tableSounds(prev: before, next: after, me: 'a');
     expect(clips.first, exact99Sound);
     expectNoEndGame(clips);
+  });
+
+  test('exact99 gives glass to each actual point loser, not celebration', () {
+    final before = table(
+      players: [a, b, c],
+      hands: {
+        'a': ['S1'],
+      },
+      pile: 88,
+    );
+    final after = play(before, 'S1', choice: 11);
+    expect(tableSounds(prev: before, next: after, me: 'a'), [
+      exact99Sound,
+      'deal',
+    ]);
+    for (final id in ['b', 'c']) {
+      expect(tableSounds(prev: before, next: after, me: id), [
+        'bust99',
+        'deal',
+      ]);
+    }
   });
 
   test('an older build cue with laughter is ignored for a point loss', () {
@@ -177,8 +201,14 @@ void main() {
     final after = play(before, 'S5');
     expect(after.players.first.points, 0);
     expect(after.status, 'finished');
-    expect(tableSounds(prev: before, next: after, me: 'a'), [matchLossSound]);
-    expect(tableSounds(prev: before, next: after, me: 'b'), [matchWinSound]);
+    expect(tableSounds(prev: before, next: after, me: 'a'), [
+      pointLossSound,
+      matchLossSound,
+    ]);
+    expect(tableSounds(prev: before, next: after, me: 'b'), [
+      pointLossSound,
+      matchWinSound,
+    ]);
   });
 
   test('reaching 0 while the match continues', () {
@@ -192,8 +222,14 @@ void main() {
     );
     final after = play(before, 'S5');
     expect(after.status, 'playing');
-    expect(tableSounds(prev: before, next: after, me: 'a'), [matchLossSound]);
-    expect(tableSounds(prev: before, next: after, me: 'b'), [eliminatedSound]);
+    expect(tableSounds(prev: before, next: after, me: 'a'), [
+      pointLossSound,
+      matchLossSound,
+    ]);
+    expect(tableSounds(prev: before, next: after, me: 'b'), [
+      pointLossSound,
+      eliminatedSound,
+    ]);
   });
 
   test('playSound never routes a point event to an end-game clip', () {
