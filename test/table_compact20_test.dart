@@ -82,6 +82,7 @@ void main() {
     testWidgets('actual compact table cards and mic order online=$online', (
       tester,
     ) async {
+      final semantics = tester.ensureSemantics();
       final render = Platform.environment['ECHO_REVIEW_RENDER'] == '1';
       if (render) {
         final font = FontLoader('ReviewArabic');
@@ -137,7 +138,7 @@ void main() {
           'mode': jackarooStandard,
           'colors': {'a': 0, 'b': 2},
           'pieces': {
-            'a': [-99, -99, -99, -99],
+            'a': [0, 10, -99, -99],
             'b': [-99, -99, -99, -99],
           },
         },
@@ -204,6 +205,70 @@ void main() {
         find.byKey(const ValueKey('hand-S9')).evaluate().single,
         same(cardElement),
       );
+      if (online) {
+        final labels = <String>[];
+        void walk(SemanticsNode node) {
+          if (node.label.isNotEmpty) labels.add(node.label);
+          for (final child in node.debugListChildrenInOrder(
+            DebugSemanticsDumpOrder.traversalOrder,
+          )) {
+            walk(child);
+          }
+        }
+
+        walk(tester.binding.pipelineOwner.semanticsOwner!.rootSemanticsNode!);
+        final micIndex = labels.indexWhere(
+          (s) => s.contains('الميكروفون مغلق'),
+        );
+        expect(micIndex, greaterThan(0));
+        for (final face in tester.widgetList<PlayingCardFace>(
+          find.byType(PlayingCardFace),
+        )) {
+          final index = labels.indexOf(face.card.englishName);
+          expect(index, greaterThanOrEqualTo(0));
+          expect(index, lessThan(micIndex));
+        }
+        repo.updates.add(
+          MatchState.fromMap({
+            ...state.toMap(),
+            'hands': {
+              'a': ['C1', 'S9', 'H4', 'D2'],
+            },
+          }, 'localmatch'),
+        );
+        await tester.pump();
+        await tester.pump();
+        expect(
+          find.byKey(const ValueKey('hand-S9')).evaluate().single,
+          same(cardElement),
+        );
+        expect(find.byKey(const ValueKey('hand-C7')), findsNothing);
+        expect(find.byKey(const ValueKey('hand-D2')), findsOneWidget);
+        final aceElement = find
+            .byKey(const ValueKey('hand-C1'))
+            .evaluate()
+            .single;
+        await tester.tap(find.byKey(const ValueKey('hand-C1')));
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 300));
+        expect(find.byType(SimpleDialog), findsOneWidget);
+        expect(find.text('إلغاء'), findsOneWidget);
+        await tester.tap(find.text('إلغاء'));
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 300));
+        expect(find.byType(SimpleDialog), findsNothing);
+        expect(
+          find.byKey(const ValueKey('hand-C1')).evaluate().single,
+          same(aceElement),
+        );
+        expect(
+          tester
+              .getSemantics(find.byKey(const ValueKey('hand-C1')))
+              .getSemanticsData()
+              .hasAction(ui.SemanticsAction.tap),
+          isTrue,
+        );
+      }
       if (render) {
         await tester.runAsync(() async {
           final image =
@@ -217,6 +282,7 @@ void main() {
         });
       }
       await tester.pumpWidget(const SizedBox());
+      semantics.dispose();
       await sounds.dispose();
       await repo.updates.close();
     });
