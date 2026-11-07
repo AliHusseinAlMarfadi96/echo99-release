@@ -111,7 +111,6 @@ List<String> snakesSounds(SnakesOutcome outcome) => [
   for (var i = 0; i < outcome.landed - outcome.from; i++) snakesDingSound,
   if (outcome.jump == 'ladder') snakesLadderSound,
   if (outcome.jump == 'snake') snakesSnakeSound,
-  if (outcome.won) 'applause',
 ];
 
 Map<String, int> snakesPositions(MatchState state) {
