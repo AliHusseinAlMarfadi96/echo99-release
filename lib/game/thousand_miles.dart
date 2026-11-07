@@ -943,7 +943,6 @@ EngineResult playMiles(
       final lost = min(add, miles);
       car['miles'] = miles - lost;
       car['score'] = _int(car['score']) - lost;
-      if (lost > 0) sounds.add('loss1');
       text = _t(
         '${seat.name} في الاتجاه المعاكس: −$lost ميل — ${car['miles']} ميل',
         '${seat.name} wrong way: −$lost miles — ${car['miles']} miles',
