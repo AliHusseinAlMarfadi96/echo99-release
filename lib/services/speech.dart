@@ -76,6 +76,8 @@ class Speech {
   }
 
   Future<void> cancelOrdered() async {
+    // Internal TTS has its own completion future and must stop on background.
+    await _tts?.stop();
     if (!kIsWeb && defaultTargetPlatform == TargetPlatform.iOS) {
       try {
         await const MethodChannel('echo99/speech_completion')
