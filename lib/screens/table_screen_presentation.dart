@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:math';
 
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/semantics.dart';
@@ -22,6 +23,7 @@ import '../services/table_event_audio.dart';
 import '../services/game_presentation.dart';
 import '../services/sounds.dart';
 import '../services/table_service.dart';
+import '../services/voice_authority.dart';
 import '../services/voice_room.dart';
 import '../widgets/game_gestures.dart';
 import '../widgets/mic_pad.dart';
@@ -91,6 +93,17 @@ class _TableScreenState extends State<TableScreen> with WidgetsBindingObserver {
   StreamSubscription<Set<String>>? _seatSub;
   StreamSubscription<String?>? _hostSub;
   StreamSubscription<bool>? _connSub;
+  StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? _voiceRoomSub;
+
+  /// Voice-admission cache, fed by [_voiceRoomSub]: null = not loaded yet,
+  /// so the first join attempt proceeds and later ones wait for admission.
+  bool? _voiceRoomExists;
+  bool _voiceMemberOk = false;
+
+  /// Identities with a ban tombstone in the voice room: every honest client
+  /// disables their audio locally, even while the live-room moderation call
+  /// has not landed (host offline / issuer unreachable).
+  Set<String> _voiceBanned = {};
   Timer? _bot;
   Timer? _clock;
   MatchState? _state;
@@ -157,6 +170,40 @@ class _TableScreenState extends State<TableScreen> with WidgetsBindingObserver {
         playerName: scope.settings.displayName,
       );
       _sub = repo.watchTable(widget.tableId).listen(_onState);
+      // Voice authority (owner's policy): anyone who opens the table joins
+      // as a listener - a missing own entry is self-created (rules force it
+      // unmuted/unbanned; existing mutes/bans always hold). Speaking stays
+      // voluntary via the mic button; the host can mute or ban from voice.
+      _voiceRoomSub = scope.voiceAuthority?.watchRoom(widget.tableId).listen((snap) {
+            if (!mounted) return;
+            _voiceRoomExists = snap.exists;
+            final entry = VoiceMember.fromMap(
+              snap.data()?['members']?[scope.settings.playerId],
+            );
+            _voiceMemberOk = entry != null && !entry.banned;
+            final members = VoiceAuthority.parseMembers(snap.data());
+            _voiceBanned = {
+              for (final e in members.entries)
+                if (e.value.banned || e.value.muted) e.key,
+            };
+            unawaited(scope.voice.applyHostMutes(_currentMutedIds()));
+            final state = _state;
+            if (state == null || scope.voice.connected) return;
+            if (entry == null && snap.exists) {
+              // Not a member yet: self-join as listener, then connect.
+              unawaited(
+                scope.voiceAuthority
+                    ?.ensureSelfListener(
+                      tableId: widget.tableId,
+                      uid: scope.settings.playerId,
+                    )
+                    .then((_) => _joinVoice(state))
+                    .onError((_, _) {}),
+              );
+            } else if (_voiceMemberOk) {
+              unawaited(_joinVoice(state));
+            }
+          }, onError: (_) {});
       _logSub = repo.watchLog(widget.tableId).listen((entries) {
         if (mounted) {
           final clips = _chatAudio.update(entries, me: scope.settings.playerId);
@@ -195,6 +242,18 @@ class _TableScreenState extends State<TableScreen> with WidgetsBindingObserver {
     _seatSub?.cancel();
     _hostSub?.cancel();
     _connSub?.cancel();
+    _voiceRoomSub?.cancel();
+    if (!widget.offline) {
+      unawaited(
+        _scope.voiceAuthority
+            ?.setPresent(
+              tableId: widget.tableId,
+              uid: _scope.settings.playerId,
+              present: false,
+            )
+            .onError((_, _) {}),
+      );
+    }
     _bot?.cancel();
     _clock?.cancel();
     unawaited(_scope.sounds.cancelPresentations());
@@ -323,13 +382,27 @@ class _TableScreenState extends State<TableScreen> with WidgetsBindingObserver {
     );
   }
 
+  Set<String> _currentMutedIds([MatchState? state]) {
+    final s = state ?? _state;
+    return {
+      if (s != null) ...[
+        for (final seat in s.players)
+          if (seat.micMuted) seat.id,
+        for (final id in (s.board['mutedMics'] as List? ?? const [])) '$id',
+      ],
+      ..._voiceBanned,
+    };
+  }
+
   Future<void> _joinVoice(MatchState state) async {
     final scope = _scope;
-    final muted = {
-      for (final seat in state.players)
-        if (seat.micMuted) seat.id,
-      for (final id in (state.board['mutedMics'] as List? ?? const [])) '$id',
-    };
+    final muted = _currentMutedIds(state);
+    // New-authority tables (a voiceRooms doc exists): only admitted members
+    // may join. Before admission lands, wait quietly - the voiceRooms
+    // listener retries the moment the host's client writes our entry.
+    if (_voiceRoomExists == true && !_voiceMemberOk) {
+      return;
+    }
     await scope.voice.applyHostMutes(muted);
     final error = await scope.voice.joinAsListener(
       identity: scope.settings.playerId,
@@ -342,6 +415,15 @@ class _TableScreenState extends State<TableScreen> with WidgetsBindingObserver {
     if (error != null) {
       await _message(error);
     } else if (scope.voice.connected) {
+      unawaited(
+        scope.voiceAuthority
+            ?.setPresent(
+              tableId: widget.tableId,
+              uid: scope.settings.playerId,
+              present: true,
+            )
+            .onError((_, _) {}),
+      );
       unawaited(scope.sounds.play('voice_join'));
     }
   }
@@ -525,11 +607,7 @@ class _TableScreenState extends State<TableScreen> with WidgetsBindingObserver {
   Future<void> _react(MatchState? prev, MatchState next) async {
     final scope = _scope;
     final me = scope.settings.playerId;
-    final mutedIds = {
-      for (final s in next.players)
-        if (s.micMuted) s.id,
-      for (final id in (next.board['mutedMics'] as List? ?? const [])) '$id',
-    };
+    final mutedIds = _currentMutedIds(next);
     unawaited(scope.voice.applyHostMutes(mutedIds));
     if (mutedIds.contains(me) && scope.voice.micOn) {
       unawaited(_setMic(false));
@@ -1454,11 +1532,22 @@ class _TableScreenState extends State<TableScreen> with WidgetsBindingObserver {
     );
   }
 
-  Future<void> _message(String? text) async {
+  Future<void> _message(
+    String? text, {
+    String? actionLabel,
+    VoidCallback? onAction,
+  }) async {
     if (!mounted || text == null || text == 'watch') {
       return;
     }
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text)));
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(text),
+        action: actionLabel != null && onAction != null
+            ? SnackBarAction(label: actionLabel, onPressed: onAction)
+            : null,
+      ),
+    );
   }
 
   String _seatLabel(Seat seat, MatchState state) {
@@ -1513,9 +1602,69 @@ class _TableScreenState extends State<TableScreen> with WidgetsBindingObserver {
                   targetId: seat.id,
                   action: isMuted ? 'unmute' : 'mute',
                 );
+                final voiceMuteErr = await scope.voiceAuthority
+                    ?.setMuted(
+                      tableId: widget.tableId,
+                      targetId: seat.id,
+                      muted: !isMuted,
+                    )
+                    .then((_) => null, onError: (e) => e);
+                if (voiceMuteErr != null) {
+                  await _message(
+                    voiceActionFailureText(
+                      voiceMuteErr,
+                      !isMuted ? 'الكتم' : 'إلغاء الكتم',
+                    ),
+                    actionLabel: 'إعادة المحاولة',
+                    onAction: () async {
+                      final retryErr = await scope.voiceAuthority
+                          ?.setMuted(
+                            tableId: widget.tableId,
+                            targetId: seat.id,
+                            muted: !isMuted,
+                          )
+                          .then((_) => null, onError: (e) => e);
+                      if (retryErr != null) {
+                        await _message(
+                          voiceActionFailureText(
+                            retryErr,
+                            !isMuted ? 'الكتم' : 'إلغاء الكتم',
+                          ),
+                        );
+                      }
+                    },
+                  );
+                }
                 // Local LiveKit: mute own mic if we are the target (remote mute best-effort).
                 if (seat.id == scope.settings.playerId) {
                   await _setMic(false);
+                }
+              },
+            ),
+            ListTile(
+              title: const Text('منع من المحادثة الصوتية'),
+              onTap: () async {
+                Navigator.pop(sheet);
+                if (widget.offline) return;
+                // Voice ban only: the player stays seated at the table.
+                final banErr = await scope.voiceAuthority
+                    ?.kick(tableId: widget.tableId, targetId: seat.id)
+                    .then((_) => null, onError: (e) => e);
+                if (banErr != null) {
+                  await _message(
+                    voiceActionFailureText(banErr, 'المنع الصوتي'),
+                    actionLabel: 'إعادة المحاولة',
+                    onAction: () async {
+                      final retryErr = await scope.voiceAuthority
+                          ?.kick(tableId: widget.tableId, targetId: seat.id)
+                          .then((_) => null, onError: (e) => e);
+                      if (retryErr != null) {
+                        await _message(
+                          voiceActionFailureText(retryErr, 'المنع الصوتي'),
+                        );
+                      }
+                    },
+                  );
                 }
               },
             ),
@@ -1546,13 +1695,33 @@ class _TableScreenState extends State<TableScreen> with WidgetsBindingObserver {
                   );
                   return;
                 }
-                await _message(
-                  await scope.repo?.kick(
-                    tableId: widget.tableId,
-                    hostId: scope.settings.playerId,
-                    targetId: seat.id,
-                  ),
+                final kickError = await scope.repo?.kick(
+                  tableId: widget.tableId,
+                  hostId: scope.settings.playerId,
+                  targetId: seat.id,
                 );
+                if (kickError == null) {
+                  final voiceKickErr = await scope.voiceAuthority
+                      ?.kick(tableId: widget.tableId, targetId: seat.id)
+                      .then((_) => null, onError: (e) => e);
+                  if (voiceKickErr != null) {
+                    await _message(
+                      voiceActionFailureText(voiceKickErr, 'الطرد'),
+                      actionLabel: 'إعادة المحاولة',
+                      onAction: () async {
+                        final retryErr = await scope.voiceAuthority
+                            ?.kick(tableId: widget.tableId, targetId: seat.id)
+                            .then((_) => null, onError: (e) => e);
+                        if (retryErr != null) {
+                          await _message(
+                            voiceActionFailureText(retryErr, 'الطرد'),
+                          );
+                        }
+                      },
+                    );
+                  }
+                }
+                await _message(kickError);
               },
             ),
             if (!seat.isBot)
@@ -1651,13 +1820,42 @@ class _TableScreenState extends State<TableScreen> with WidgetsBindingObserver {
                               );
                               return;
                             }
-                            await _message(
-                              await scope.repo?.kick(
-                                tableId: widget.tableId,
-                                hostId: scope.settings.playerId,
-                                targetId: seat.id,
-                              ),
+                            final kickError = await scope.repo?.kick(
+                              tableId: widget.tableId,
+                              hostId: scope.settings.playerId,
+                              targetId: seat.id,
                             );
+                            if (kickError == null) {
+                              final voiceKickErr = await scope.voiceAuthority
+                                  ?.kick(
+                                    tableId: widget.tableId,
+                                    targetId: seat.id,
+                                  )
+                                  .then((_) => null, onError: (e) => e);
+                              if (voiceKickErr != null) {
+                                await _message(
+                                  voiceActionFailureText(voiceKickErr, 'الطرد'),
+                                  actionLabel: 'إعادة المحاولة',
+                                  onAction: () async {
+                                    final retryErr = await scope.voiceAuthority
+                                        ?.kick(
+                                          tableId: widget.tableId,
+                                          targetId: seat.id,
+                                        )
+                                        .then((_) => null, onError: (e) => e);
+                                    if (retryErr != null) {
+                                      await _message(
+                                        voiceActionFailureText(
+                                          retryErr,
+                                          'الطرد',
+                                        ),
+                                      );
+                                    }
+                                  },
+                                );
+                              }
+                            }
+                            await _message(kickError);
                           },
                           icon: const Icon(Icons.close),
                         )

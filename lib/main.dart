@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 
@@ -25,6 +26,7 @@ import 'services/sounds.dart';
 import 'services/startup_audio.dart';
 import 'services/speech.dart';
 import 'services/table_repository.dart';
+import 'services/voice_authority.dart';
 import 'services/voice_room.dart';
 import 'services/voice_token_transport.dart';
 
@@ -76,6 +78,7 @@ class _Echo99AppState extends State<Echo99App> with WidgetsBindingObserver {
   late final AccountController _account;
   TableRepository? _repo;
   SocialRepository? _social;
+  VoiceAuthority? _voiceAuthority;
   int? _latencyMs;
   var _latencyFailed = false;
   var _configReady = false;
@@ -117,6 +120,10 @@ class _Echo99AppState extends State<Echo99App> with WidgetsBindingObserver {
     }
     _repo = TableRepository();
     _social = SocialRepository();
+    _voiceAuthority = VoiceAuthority(
+      FirebaseFirestore.instance,
+      transport: _voiceTokens,
+    );
   }
 
   Future<void> _loadConfig() async {
@@ -476,6 +483,7 @@ class _Echo99AppState extends State<Echo99App> with WidgetsBindingObserver {
           sounds: _sounds,
           speech: _speech,
           voice: _voice,
+          voiceAuthority: _voiceAuthority,
           presence: _presence,
           child: SocialCueListener(
             enabled:
