@@ -12,6 +12,7 @@ import '../game/snakes.dart';
 import '../game/ludo.dart';
 import '../game/thousand_miles.dart';
 import 'local_match.dart' show nextBotName;
+import 'voice_authority.dart';
 
 class TableSummary {
   const TableSummary({
@@ -251,11 +252,17 @@ class TableRepository {
       settings: settings,
       game: game,
     );
-    await _tables.doc(id).set({
+    final batch = _db.batch();
+    batch.set(_tables.doc(id), {
       ...state.toMap(),
       'createdAt': FieldValue.serverTimestamp(),
       ..._liveness(),
     });
+    // The voice authority doc is created atomically with the table: the
+    // rules bind voiceRooms.hostId to the table's hostId via getAfter,
+    // which only holds within a single commit.
+    VoiceAuthority.stageRoomCreate(_db, batch, tableId: id, hostId: hostId);
+    await batch.commit();
     await appendLog(
       tableId: id,
       kind: 'system',
@@ -387,6 +394,11 @@ class TableRepository {
     for (final name in tableSubcollections) {
       await _deleteCollection(ref.collection(name));
     }
+    // The voice authority doc goes with its table (host-only delete in the
+    // rules); a missing room (legacy table) is not an error here.
+    try {
+      await _db.collection('voiceRooms').doc(tableId).delete();
+    } catch (_) {}
     await ref.delete();
   }
 
