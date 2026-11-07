@@ -64,6 +64,25 @@ class VoiceRoom {
   bool get hostMutedLocal =>
       _identity != null && _hostMuted.contains(_identity);
 
+  /// Identities actually in the LiveKit room right now (the authoritative
+  /// voice roster; a client's Firestore `present` flag is forgeable and
+  /// crash-stale, so it is never used for this).
+  final StreamController<List<String>> _roster =
+      StreamController<List<String>>.broadcast();
+  Stream<List<String>> get remoteRoster => _roster.stream;
+
+  void _emitRoster() {
+    final room = _room;
+    if (room == null) {
+      _roster.add(const []);
+      return;
+    }
+    _roster.add([
+      for (final participant in room.remoteParticipants.values)
+        participant.identity,
+    ]);
+  }
+
   static const unconfigured = 'خدمة الصوت غير مهيأة حالياً.';
 
   static const serverUnconfigured = 'الصوت غير متاح حالياً.';
@@ -117,6 +136,7 @@ class VoiceRoom {
     _serverMuted = !(room.localParticipant?.permissions.canPublish ?? false);
     _watch(room);
     await _applyRemoteMutes();
+    _emitRoster();
     return null;
   }
 
@@ -124,6 +144,7 @@ class VoiceRoom {
     final previous = _events;
     _events = room.createListener()
       ..on<ParticipantDisconnectedEvent>((_) {
+        _emitRoster();
         if (_tableId != null && _tableId != 'echo99lobby') {
           onPeerLost?.call();
         }
@@ -133,6 +154,7 @@ class VoiceRoom {
       })
       ..on<ParticipantConnectedEvent>((_) {
         unawaited(_applyRemoteMutes());
+        _emitRoster();
       })
       ..on<ParticipantPermissionsUpdatedEvent>((event) {
         // Server-side moderation changed our grants. LiveKit auto-refreshes
@@ -373,5 +395,6 @@ class VoiceRoom {
     _serverMuted = false;
     micOn = false;
     sharingAudio = false;
+    _emitRoster();
   }
 }

@@ -104,6 +104,17 @@ class _TableScreenState extends State<TableScreen> with WidgetsBindingObserver {
   /// disables their audio locally, even while the live-room moderation call
   /// has not landed (host offline / issuer unreachable).
   Set<String> _voiceBanned = {};
+
+  /// Identities actually connected to the LiveKit room (authoritative voice
+  /// roster; the client `present` flag is forgeable and crash-stale).
+  /// Null until the first roster event arrives.
+  List<String>? _voiceRoster;
+
+  /// True when the roster stream errored: the participants list falls back
+  /// to a clearly labelled unavailable note instead of pretending to be
+  /// complete.
+  bool _voiceRosterFailed = false;
+  StreamSubscription<List<String>>? _voiceRosterSub;
   Timer? _bot;
   Timer? _clock;
   MatchState? _state;
@@ -204,6 +215,13 @@ class _TableScreenState extends State<TableScreen> with WidgetsBindingObserver {
               unawaited(_joinVoice(state));
             }
           }, onError: (_) {});
+      _voiceRosterSub = scope.voice.remoteRoster.listen(
+        (ids) => setState(() {
+          _voiceRoster = ids;
+          _voiceRosterFailed = false;
+        }),
+        onError: (_) => setState(() => _voiceRosterFailed = true),
+      );
       _logSub = repo.watchLog(widget.tableId).listen((entries) {
         if (mounted) {
           final clips = _chatAudio.update(entries, me: scope.settings.playerId);
@@ -243,6 +261,7 @@ class _TableScreenState extends State<TableScreen> with WidgetsBindingObserver {
     _hostSub?.cancel();
     _connSub?.cancel();
     _voiceRoomSub?.cancel();
+    _voiceRosterSub?.cancel();
     if (!widget.offline) {
       unawaited(
         _scope.voiceAuthority
@@ -392,6 +411,149 @@ class _TableScreenState extends State<TableScreen> with WidgetsBindingObserver {
       ],
       ..._voiceBanned,
     };
+  }
+
+  /// The voice participants row: sourced from the ACTUAL LiveKit room
+  /// roster, so observers who never take a seat are visible too. When the
+  /// roster cannot be read, a clearly labelled note is shown instead of a
+  /// silently incomplete list.
+  Widget _voiceParticipantsRow(MatchState? state) {
+    final scope = _scope;
+    if (!scope.voice.connected) return const SizedBox.shrink();
+    if (_voiceRosterFailed) {
+      return const Padding(
+        padding: EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+        child: Text(
+          'تعذّر تحديث قائمة المشاركين في الصوت؛ المعروض قد لا يكون كاملاً',
+          style: TextStyle(fontSize: 12),
+          textAlign: TextAlign.center,
+        ),
+      );
+    }
+    final roster = _voiceRoster;
+    if (roster == null || roster.isEmpty) return const SizedBox.shrink();
+    final muted = _currentMutedIds(state);
+    final me = scope.settings.playerId;
+    return Semantics(
+      label: 'المشاركون في المحادثة الصوتية',
+      container: true,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 8),
+        child: Wrap(
+          alignment: WrapAlignment.center,
+          spacing: 6,
+          runSpacing: 4,
+          children: [
+            for (final id in roster)
+              if (id != me)
+                _voiceParticipantChip(id, state, muted.contains(id)),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _voiceParticipantChip(String id, MatchState? state, bool muted) {
+    final seat = state?.players.where((s) => s.id == id).firstOrNull;
+    final label = seat?.name ??
+        'مشارك صوتي ${id.length <= 4 ? id : id.substring(0, 4)}';
+    return ActionChip(
+      avatar: Icon(muted ? Icons.mic_off : Icons.mic, size: 16),
+      label: Text(label),
+      onPressed: () => _onVoiceParticipantTap(id, seat),
+    );
+  }
+
+  /// Host moderation for a roster participant. Seated participants use the
+  /// full seat sheet; a NON-SEATED participant (observer) gets voice-only
+  /// controls (mute / voice ban) so the host can act on everyone in the
+  /// room, per the owner's policy.
+  Future<void> _onVoiceParticipantTap(String id, Seat? seat) async {
+    final scope = _scope;
+    final state = _state;
+    if (state == null) return;
+    if (seat != null) {
+      await _onPlayerNameTap(seat, state);
+      return;
+    }
+    final host = state.hostId == scope.settings.playerId;
+    if (!host || id == state.hostId || widget.offline) return;
+    final isMuted = _currentMutedIds(state).contains(id);
+    await showModalBottomSheet<void>(
+      context: context,
+      builder: (sheet) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const ListTile(title: Text('مشارك صوتي')),
+            ListTile(
+              title: Text(isMuted ? 'إلغاء كتم الميكروفون' : 'كتم الميكروفون'),
+              onTap: () async {
+                Navigator.pop(sheet);
+                final err = await scope.voiceAuthority
+                    ?.setMuted(
+                      tableId: widget.tableId,
+                      targetId: id,
+                      muted: !isMuted,
+                    )
+                    .then((_) => null, onError: (e) => e);
+                if (err != null) {
+                  await _message(
+                    voiceActionFailureText(
+                      err,
+                      !isMuted ? 'الكتم' : 'إلغاء الكتم',
+                    ),
+                    actionLabel: 'إعادة المحاولة',
+                    onAction: () async {
+                      final retryErr = await scope.voiceAuthority
+                          ?.setMuted(
+                            tableId: widget.tableId,
+                            targetId: id,
+                            muted: !isMuted,
+                          )
+                          .then((_) => null, onError: (e) => e);
+                      if (retryErr != null) {
+                        await _message(
+                          voiceActionFailureText(
+                            retryErr,
+                            !isMuted ? 'الكتم' : 'إلغاء الكتم',
+                          ),
+                        );
+                      }
+                    },
+                  );
+                }
+              },
+            ),
+            ListTile(
+              title: const Text('منع من المحادثة الصوتية'),
+              onTap: () async {
+                Navigator.pop(sheet);
+                final banErr = await scope.voiceAuthority
+                    ?.kick(tableId: widget.tableId, targetId: id)
+                    .then((_) => null, onError: (e) => e);
+                if (banErr != null) {
+                  await _message(
+                    voiceActionFailureText(banErr, 'المنع الصوتي'),
+                    actionLabel: 'إعادة المحاولة',
+                    onAction: () async {
+                      final retryErr = await scope.voiceAuthority
+                          ?.kick(tableId: widget.tableId, targetId: id)
+                          .then((_) => null, onError: (e) => e);
+                      if (retryErr != null) {
+                        await _message(
+                          voiceActionFailureText(retryErr, 'المنع الصوتي'),
+                        );
+                      }
+                    },
+                  );
+                }
+              },
+            ),
+          ],
+        ),
+      ),
+    );
   }
 
   Future<void> _joinVoice(MatchState state) async {
@@ -2937,6 +3099,7 @@ class _TableScreenState extends State<TableScreen> with WidgetsBindingObserver {
                             explicitChildNodes: true,
                             child: _body(state),
                           ),
+                        if (_online) _voiceParticipantsRow(state),
                         if (_online)
                           Semantics(
                             sortKey: const OrdinalSortKey(2),
