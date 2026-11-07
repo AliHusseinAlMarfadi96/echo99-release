@@ -216,7 +216,15 @@ void main() {
           }
         }
 
-        walk(tester.binding.pipelineOwner.semanticsOwner!.rootSemanticsNode!);
+        walk(
+          tester
+              .binding
+              .renderViews
+              .first
+              .owner!
+              .semanticsOwner!
+              .rootSemanticsNode!,
+        );
         final micIndex = labels.indexWhere(
           (s) => s.contains('الميكروفون مغلق'),
         );
