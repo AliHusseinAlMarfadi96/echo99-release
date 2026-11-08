@@ -89,13 +89,17 @@ class VoiceRoom {
 
   static const hostMutedError = 'المضيف كتم ميكروفونك';
 
-  /// Own the Apple session per voice phase: media playback while listening
-  /// (remote voice and game sounds mix, nothing ducked), communication only
+  /// Own the audio session per voice phase: media playback while listening
+  /// (remote voice and game sounds mix; on iOS nothing is ducked by the
+  /// voice-processing mode, on Android sounds stay on the normal/music
+  /// stream instead of the low-volume voice-call path), communication only
   /// while the microphone is published (echo cancellation). Manual mode is
-  /// handed back to LiveKit's automatic management on [close]. Apple-only:
-  /// Android keeps the SDK default, which has no session-ducking conflict.
+  /// handed back to LiveKit's automatic management on [close]. Mobile only:
+  /// web/desktop keep the SDK default.
   Future<void> _applySessionPolicy({required bool capturing}) async {
-    if (kIsWeb || defaultTargetPlatform != TargetPlatform.iOS) return;
+    if (kIsWeb) return;
+    final p = defaultTargetPlatform;
+    if (p != TargetPlatform.iOS && p != TargetPlatform.android) return;
     try {
       await AudioManager.instance.setAudioSessionOptions(
         capturing
@@ -106,7 +110,9 @@ class VoiceRoom {
   }
 
   Future<void> _restoreAutomaticSession() async {
-    if (kIsWeb || defaultTargetPlatform != TargetPlatform.iOS) return;
+    if (kIsWeb) return;
+    final p = defaultTargetPlatform;
+    if (p != TargetPlatform.iOS && p != TargetPlatform.android) return;
     try {
       await AudioManager.instance.setAudioSessionManagementMode(
         AudioSessionManagementMode.automatic,

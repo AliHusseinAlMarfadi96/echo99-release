@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 
+import 'package:echo99/services/game_presentation.dart';
 import 'package:echo99/services/sound_player.dart';
 import 'package:echo99/services/sounds.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -14,7 +15,7 @@ class FakePlayer implements SoundPlayer {
   @override
   Stream<void> get completed => end.stream;
   @override
-  Future<void> playAsset(String path, {bool loop = false}) async {
+  Future<void> playAsset(String path, {bool loop = false, double? speed}) async {
     if (disposed) throw StateError('disposed');
     if (fail) throw StateError('load failed');
     events.add('$path:$loop');
@@ -33,9 +34,11 @@ class FakePlayer implements SoundPlayer {
 
 class FakeSequencePlayer extends FakePlayer implements SequenceSoundPlayer {
   final finish = Completer<void>();
+  List<double>? lastSpeeds;
   @override
-  Future<void> playAssets(List<String> paths) async {
+  Future<void> playAssets(List<String> paths, {List<double>? speeds}) async {
     events.addAll(paths);
+    lastSpeeds = speeds;
     await finish.future;
   }
 }
@@ -240,11 +243,145 @@ void main() {
       clock.flushMicrotasks();
     });
   });
+  test('movement steps play faster as whole clips and finish before the turn tone', () {
+    fakeAsync((clock) {
+      final players = <FakeSequencePlayer>[];
+      final board = SoundBoard(
+        playerFactory: () {
+          final player = FakeSequencePlayer();
+          players.add(player);
+          return player;
+        },
+      );
+      final order = <String>[];
+      unawaited(
+        board
+            .present(() async {
+              await board.playNow(
+                ['jk_card_play', for (var i = 0; i < 6; i++) 'jk_step1'],
+                speeds: [1.0, for (var i = 0; i < 6; i++) stepClipSpeed],
+              );
+              order.add('steps');
+              await board.playNow(['your_turn']);
+              order.add('turn');
+            })
+            .catchError((Object e) {
+              order.add('error');
+            }),
+      );
+      clock.flushMicrotasks();
+      // The whole six-step sequence is one gated native playlist, 1.5x steps.
+      expect(players[3].events, [
+        'sounds/jk_card_play.mp3',
+        for (var i = 0; i < 6; i++) 'sounds/jk_step1.mp3',
+      ]);
+      expect(players[3].lastSpeeds, [1.0, 1.5, 1.5, 1.5, 1.5, 1.5, 1.5]);
+      players[3].finish.complete();
+      clock.flushMicrotasks();
+      // The turn tone starts only after every step completed natively.
+      expect(order, ['steps']);
+      expect(players[4].events, ['sounds/your_turn.mp3']);
+      expect(players[4].lastSpeeds, isNull);
+      players[4].finish.complete();
+      clock.flushMicrotasks();
+      expect(order, ['steps', 'turn']);
+      unawaited(board.dispose());
+      clock.flushMicrotasks();
+    });
+  });
+  test('step clips carry the faster whole-clip rate, other clips unchanged', () {
+    expect(clipPlaybackSpeed('jk_step1'), stepClipSpeed);
+    expect(clipPlaybackSpeed('jk_step2'), stepClipSpeed);
+    expect(clipPlaybackSpeed('jk_step_back1'), stepClipSpeed);
+    expect(clipPlaybackSpeed('jk_step_back2'), stepClipSpeed);
+    expect(clipPlaybackSpeed('jk_card_play'), 1.0);
+    expect(clipPlaybackSpeed('your_turn'), 1.0);
+  });
+  test('stall budget follows the playback rate, never the unsped duration', () {
+    fakeAsync((clock) {
+      final players = <FakeSequencePlayer>[];
+      final board = SoundBoard(
+        playerFactory: () {
+          final player = FakeSequencePlayer();
+          players.add(player);
+          return player;
+        },
+      );
+      final events = <String>[];
+      unawaited(
+        board
+            .present(() async {
+              await board.playNow(['jk_step1'], speeds: [stepClipSpeed]);
+              events.add('result');
+            })
+            .catchError((Object e) {
+              events.add('error');
+            }),
+      );
+      clock.flushMicrotasks();
+      // 216ms at 1.5x + 4s grace is about 4.1s; a hang beyond it fails fast.
+      clock.elapse(const Duration(seconds: 5));
+      clock.flushMicrotasks();
+      expect(events, ['error']);
+      unawaited(board.dispose());
+      clock.flushMicrotasks();
+    });
+  });
+  test('long card-renewal sequence stays gated inside its scaled budget', () {
+    fakeAsync((clock) {
+      final players = <FakeSequencePlayer>[];
+      final board = SoundBoard(
+        playerFactory: () {
+          final player = FakeSequencePlayer();
+          players.add(player);
+          return player;
+        },
+      );
+      final events = <String>[];
+      unawaited(
+        board
+            .present(() async {
+              await board.playNow(
+                [
+                  'jk_card_play',
+                  for (var i = 0; i < 6; i++) 'jk_step1',
+                  'jk_reshuffle',
+                  'jk_deal_cards',
+                ],
+                speeds: [
+                  1.0,
+                  for (var i = 0; i < 6; i++) stepClipSpeed,
+                  1.0,
+                  1.0,
+                ],
+              );
+              events.add('result');
+            })
+            .catchError((Object e) {
+              events.add('error');
+            }),
+      );
+      clock.flushMicrotasks();
+      // Scaled budget: 552 + 6*216/1.5 + 1440 + 1032 = 3888ms + 4s grace.
+      // Native playback 3s behind schedule must NOT be cut off.
+      clock.elapse(const Duration(milliseconds: 6888));
+      clock.flushMicrotasks();
+      expect(events, isEmpty);
+      players[3].finish.complete();
+      clock.flushMicrotasks();
+      expect(events, ['result']);
+      unawaited(board.dispose());
+      clock.flushMicrotasks();
+    });
+  });
   test('real native adapter awaits play future instead of launch only', () {
     final source = File('lib/services/sound_player.dart').readAsStringSync();
     final native = source.substring(source.indexOf('Future<void> playAssets'));
     expect(native, contains('await _player.play();'));
-    expect(native, isNot(contains('unawaited(')));
+    // Per-item rate switches are fire-and-forget by design; playback and
+    // loads stay awaited. Only setSpeed may be unawaited.
+    final fireAndForget = RegExp(r'unawaited\((?!_player\.setSpeed)');
+    expect(native, isNot(contains(fireAndForget)));
   });
   test('failed load does not hang later presentations', () async {
     final players = <FakePlayer>[];
