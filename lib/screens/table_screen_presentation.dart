@@ -18,10 +18,10 @@ import '../services/doc_id.dart';
 import '../services/local_match.dart';
 import '../services/presence.dart';
 import '../services/social_repository.dart';
+import '../services/sounds.dart';
 import '../services/table_repository.dart';
 import '../services/table_event_audio.dart';
 import '../services/game_presentation.dart';
-import '../services/sounds.dart';
 import '../services/table_service.dart';
 import '../services/voice_authority.dart';
 import '../services/voice_room.dart';
@@ -794,7 +794,14 @@ class _TableScreenState extends State<TableScreen> with WidgetsBindingObserver {
       final text = '${next.board['text'] ?? ''}';
       if (text.isNotEmpty) resultText = text;
     }
-    await scope.sounds.playNow(presentationClips(prev, next, me));
+    try {
+      await scope.sounds.playNow(presentationClips(prev, next, me));
+    } catch (error) {
+      if (error is PresentationCancelled) rethrow;
+      // A failed movement sequence must not swallow the turn cue or freeze
+      // the presentation queue; later steps still present their own audio.
+      _say('تعذر إكمال صوت الحركة. راجع اختبار الصوت في الإعدادات.');
+    }
     if (!mounted) return;
     if (resultText != null) {
       _appendPlay(resultText);

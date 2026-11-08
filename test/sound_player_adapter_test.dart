@@ -172,7 +172,8 @@ void main() {
         );
         clock.flushMicrotasks();
         expect(players[3].events, ['sounds/card.mp3', 'sounds/your_turn.mp3']);
-        clock.elapse(const Duration(seconds: 20));
+        // Past the clip durations but inside the stall budget: still gated.
+        clock.elapse(const Duration(seconds: 2));
         clock.flushMicrotasks();
         expect(events, isEmpty);
         expect(players[3].disposed, false);
@@ -197,6 +198,48 @@ void main() {
       });
     },
   );
+  test('native stall past the clip budget fails the presentation fast', () {
+    fakeAsync((clock) {
+      final players = <FakeSequencePlayer>[];
+      final board = SoundBoard(
+        playerFactory: () {
+          final player = FakeSequencePlayer();
+          players.add(player);
+          return player;
+        },
+      );
+      final events = <String>[];
+      unawaited(
+        board
+            .present(() async {
+              await board.playNow(['card', 'your_turn']);
+              events.add('result');
+            })
+            .catchError((Object e) {
+              events.add('error');
+            }),
+      );
+      clock.flushMicrotasks();
+      // card 418ms + your_turn 967ms + 4s grace = a hung native player must
+      // fail the presentation instead of freezing the queue for minutes.
+      clock.elapse(const Duration(seconds: 30));
+      clock.flushMicrotasks();
+      expect(events, ['error']);
+      expect(players[3].disposed, true);
+      unawaited(
+        board.present(() async {
+          await board.playNow(['card']);
+          events.add('fresh');
+        }),
+      );
+      clock.flushMicrotasks();
+      players[4].finish.complete();
+      clock.flushMicrotasks();
+      expect(events, ['error', 'fresh']);
+      unawaited(board.dispose());
+      clock.flushMicrotasks();
+    });
+  });
   test('real native adapter awaits play future instead of launch only', () {
     final source = File('lib/services/sound_player.dart').readAsStringSync();
     final native = source.substring(source.indexOf('Future<void> playAssets'));

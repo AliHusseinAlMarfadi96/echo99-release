@@ -24,7 +24,13 @@ if p.exists(): p.write_text(p.read_text("utf-8").replace(";;", ";"), "utf-8")
 dest = Path(sys.argv[1] if len(sys.argv) > 1 else "tool/livekit.defines.json")
 current = json.loads(dest.read_text("utf-8")) if dest.exists() else {}
 out = {k: v for k, v in (current.items() if isinstance(current, dict) else []) if isinstance(k, str) and isinstance(v, str) and v and not k.startswith("GOOGLE_")}
-out.update({k: os.environ[k] for k in ("LIVEKIT_URL", "LIVEKIT_API_KEY", "LIVEKIT_API_SECRET") if os.environ.get(k)})
+# Repair branch: server-minted voice tokens only. Never ship the LiveKit
+# signing secret in new artifacts (the legacy client-mint path is dead when
+# VOICE_TOKEN_SERVER is on); the issuer endpoint is public - its protection
+# is the Firebase ID token check server-side, not secrecy of the URL.
+out.update({k: os.environ[k] for k in ("LIVEKIT_URL",) if os.environ.get(k)})
+out["VOICE_TOKEN_SERVER"] = "true"
+out["VOICE_TOKEN_ENDPOINT"] = os.environ.get("VOICE_TOKEN_ENDPOINT") or "https://script.google.com/macros/s/AKfycbymkV2XY51n8aVL_2QMyYiuOwoWgcGNto9ptpJ19hZV8B_RHbMGnr3IpZ6nffbrrCyy/exec"
 plist_p = Path("ios/Runner/GoogleService-Info.plist")
 if plist_p.exists(): out.update({"GOOGLE_IOS_CLIENT_ID": v for k, v in plistlib.loads(plist_p.read_bytes()).items() if k == "CLIENT_ID" and isinstance(v, str) and v})
 gs_p = Path("android/app/google-services.json")

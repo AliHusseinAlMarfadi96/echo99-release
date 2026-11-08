@@ -1,6 +1,6 @@
 /// Must match the version name in pubspec.yaml.
 const appVersion = '1.3.5';
-const appBuild = '20';
+const appBuild = '22';
 
 const androidUpdateUrl =
     'https://github.com/AliHusseinAlMarfadi96/echo99-flutter/releases/download/v1.2.0/Echo99.apk';

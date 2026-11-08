@@ -132,6 +132,17 @@ class SoundBoard {
     return run;
   }
 
+  /// How long playback of [valid] may legitimately take, plus slack for
+  /// session negotiation. A native stall must fail fast: an unbounded wait
+  /// freezes the whole presentation queue (bots, turn timer, turn tone).
+  static Duration _boundFor(List<String> valid) {
+    var totalMs = 0;
+    for (final name in valid) {
+      totalMs += soundDurationsMs[name] ?? 1500;
+    }
+    return Duration(milliseconds: totalMs + 4000);
+  }
+
   /// Native completion, not a duration estimate, advances the game queue.
   /// A missing completion times out as a failure, never as successful playback.
   Future<void> playNow(List<String> names) async {
@@ -150,7 +161,7 @@ class SoundBoard {
           _cancelPresentation.future.then<void>(
             (_) => throw PresentationCancelled(),
           ),
-        ]).timeout(const Duration(minutes: 5));
+        ]).timeout(_boundFor(valid));
       } else {
         for (final name in valid) {
           if (_disposed) return;
@@ -161,7 +172,7 @@ class SoundBoard {
             _cancelPresentation.future.then<void>(
               (_) => throw PresentationCancelled(),
             ),
-          ]).timeout(const Duration(minutes: 5));
+          ]).timeout(_boundFor([name]));
         }
       }
     } catch (error) {

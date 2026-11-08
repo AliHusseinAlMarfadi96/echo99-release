@@ -89,6 +89,31 @@ class VoiceRoom {
 
   static const hostMutedError = 'المضيف كتم ميكروفونك';
 
+  /// Own the Apple session per voice phase: media playback while listening
+  /// (remote voice and game sounds mix, nothing ducked), communication only
+  /// while the microphone is published (echo cancellation). Manual mode is
+  /// handed back to LiveKit's automatic management on [close]. Apple-only:
+  /// Android keeps the SDK default, which has no session-ducking conflict.
+  Future<void> _applySessionPolicy({required bool capturing}) async {
+    if (kIsWeb || defaultTargetPlatform != TargetPlatform.iOS) return;
+    try {
+      await AudioManager.instance.setAudioSessionOptions(
+        capturing
+            ? const AudioSessionOptions.communication()
+            : const AudioSessionOptions.mediaPlayback(),
+      );
+    } catch (_) {}
+  }
+
+  Future<void> _restoreAutomaticSession() async {
+    if (kIsWeb || defaultTargetPlatform != TargetPlatform.iOS) return;
+    try {
+      await AudioManager.instance.setAudioSessionManagementMode(
+        AudioSessionManagementMode.automatic,
+      );
+    } catch (_) {}
+  }
+
   @protected
   Future<String?> connectVoice({
     required String identity,
@@ -133,6 +158,11 @@ class VoiceRoom {
     await room.localParticipant?.setMicrophoneEnabled(false);
     micOn = false;
     GameAudioPolicy.shared.captureRequested = false;
+    // Device feedback (1.3.5+20): automatic mode holds playAndRecord +
+    // voiceChat for the whole table visit, ducking/cutting every game clip
+    // and TTS line while merely listening. Media session until the mic is
+    // actually opened.
+    await _applySessionPolicy(capturing: false);
     _serverMuted = !(room.localParticipant?.permissions.canPublish ?? false);
     _watch(room);
     await _applyRemoteMutes();
@@ -167,6 +197,7 @@ class VoiceRoom {
             unawaited(_room?.localParticipant?.setMicrophoneEnabled(false));
             micOn = false;
             GameAudioPolicy.shared.captureRequested = false;
+            unawaited(_applySessionPolicy(capturing: false));
           }
         }
       });
@@ -271,6 +302,7 @@ class VoiceRoom {
       GameAudioPolicy.shared.captureRequested = false;
       await removeMicrophonePublication();
       inConversation = false;
+      await _applySessionPolicy(capturing: false);
       return null;
     } catch (_) {
       return 'تعذر الرجوع لوضع الاستماع.';
@@ -330,11 +362,18 @@ class VoiceRoom {
       }
       final previousIntent = GameAudioPolicy.shared.captureRequested;
       GameAudioPolicy.shared.captureRequested = enabled;
+      // The capture session must be active BEFORE the mic track starts;
+      // publishing into a playback-only session fails or records nothing.
+      await _applySessionPolicy(capturing: enabled);
       try {
         await publishMicrophone(enabled);
       } catch (_) {
         GameAudioPolicy.shared.captureRequested = previousIntent;
+        await _applySessionPolicy(capturing: previousIntent);
         rethrow;
+      }
+      if (!enabled) {
+        await _applySessionPolicy(capturing: false);
       }
       if (request != _micRequest) {
         await publishMicrophone(false);
@@ -396,5 +435,6 @@ class VoiceRoom {
     micOn = false;
     sharingAudio = false;
     _emitRoster();
+    await _restoreAutomaticSession();
   }
 }
