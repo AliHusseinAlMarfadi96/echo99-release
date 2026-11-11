@@ -218,4 +218,43 @@ void main() {
     expect(players.last.disposed, true);
     await board.dispose();
   });
+  test(
+    'stopLoop during a slow loop stop prevents the late playAsset from starting',
+    () async {
+      final gate = Completer<void>();
+      final players = <FakePlayer>[];
+      final board = SoundBoard(
+        playerFactory: () {
+          final p = _GatedPlayer(gate);
+          players.add(p);
+          return p;
+        },
+      );
+      final loopFuture = board.loop('ambient', repeat: false);
+      await Future<void>.delayed(Duration.zero);
+      // finish() path: stopLoop must win even while loop() is still
+      // waiting on the player's stop.
+      final stopFuture = board.stopLoop();
+      gate.complete();
+      await loopFuture;
+      await stopFuture;
+      final loopPlayer = players[2];
+      expect(
+        loopPlayer.events.where((e) => e.startsWith('sounds/')),
+        isEmpty,
+        reason: 'a superseded loop must never start playback after stopLoop',
+      );
+      await board.dispose();
+    },
+  );
+}
+
+class _GatedPlayer extends FakePlayer {
+  _GatedPlayer(this.gate);
+  final Completer<void> gate;
+  @override
+  Future<void> stop() async {
+    events.add('stop');
+    await gate.future;
+  }
 }

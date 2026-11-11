@@ -40,6 +40,84 @@ bool isStepAssetPath(String path) =>
     path == 'sounds/jk_step_back1.mp3' ||
     path == 'sounds/jk_step_back2.mp3';
 
+/// Minimal playback surface the paced step run needs. The default
+/// implementation delegates to just_audio; tests substitute a fake so the
+/// production pacing logic runs without platform channels.
+abstract class StepClipDriver {
+  Future<void> pause();
+  Future<void> setAsset(String asset);
+  Future<void> seek(Duration position);
+  Future<void> play();
+}
+
+/// Plays identical movement clips at exactly 250 BPM (240ms start-to-start)
+/// from the original asset, untruncated and at 1.0x speed: the longest step
+/// clip is 216ms < 240ms, so no clip is cut or overlapped. Extracted from
+/// ManagedSoundPlayer so the cadence is unit-testable.
+class PacedStepRunner {
+  // ignore: prefer_initializing_formals (public named param, private field)
+  PacedStepRunner({
+    required StepClipDriver driver,
+    Stopwatch Function()? stopwatchFactory,
+    Future<void> Function(Duration)? delay,
+  })  : _driver = driver,
+        _stopwatchFactory = stopwatchFactory ?? Stopwatch.new,
+        _delay = delay ?? Future<void>.delayed;
+
+  final StepClipDriver _driver;
+  final Stopwatch Function() _stopwatchFactory;
+  final Future<void> Function(Duration) _delay;
+
+  /// Runs [stepCount] paced plays of [assetPath]. [cancelled] is checked
+  /// before every action; when it reports true the run aborts immediately.
+  Future<void> run({
+    required String assetPath,
+    required int stepCount,
+    required bool Function() cancelled,
+  }) async {
+    await _driver.pause();
+    if (cancelled()) return;
+    await _driver.setAsset('assets/$assetPath');
+    if (cancelled()) return;
+
+    final watch = _stopwatchFactory()..start();
+    for (var step = 0; step < stepCount; step++) {
+      if (cancelled()) return;
+      final targetStart = kStepBeatInterval * step;
+      final waitBeforeStep = targetStart - watch.elapsed;
+      if (waitBeforeStep > Duration.zero) {
+        await _delay(waitBeforeStep);
+        if (cancelled()) return;
+      }
+      if (step > 0) {
+        await _driver.pause();
+        await _driver.seek(Duration.zero);
+        if (cancelled()) return;
+      }
+      await _driver.play();
+    }
+
+    final totalRunWindow = kStepBeatInterval * stepCount;
+    final tailWait = totalRunWindow - watch.elapsed;
+    if (tailWait > Duration.zero && !cancelled()) {
+      await _delay(tailWait);
+    }
+  }
+}
+
+class _JaStepClipDriver implements StepClipDriver {
+  const _JaStepClipDriver(this._player);
+  final ja.AudioPlayer _player;
+  @override
+  Future<void> pause() => _player.pause();
+  @override
+  Future<void> setAsset(String asset) => _player.setAsset(asset);
+  @override
+  Future<void> seek(Duration position) => _player.seek(position);
+  @override
+  Future<void> play() => _player.play();
+}
+
 class ManagedSoundPlayer implements SequenceSoundPlayer {
   ManagedSoundPlayer({
     Future<void> Function()? prepareSession,
@@ -147,41 +225,22 @@ class ManagedSoundPlayer implements SequenceSoundPlayer {
     }
   }
 
-  /// Plays [stepCount] identical movement clips at exactly 250 BPM (240ms
-  /// start-to-start) from the original asset, untruncated and at 1.0x speed:
-  /// the longest step clip is 216ms < 240ms, so no clip is cut or overlapped.
+  /// Plays [stepCount] identical movement clips at exactly 250 BPM via
+  /// [PacedStepRunner]; see that class for the cadence contract.
   Future<void> _playPacedStepRun({
     required String assetPath,
     required int stepCount,
     required int generation,
-  }) async {
-    await _player.pause();
-    if (_disposed || generation != _generation) return;
-    await _player.setAsset('assets/$assetPath');
-    if (_disposed || generation != _generation) return;
-
-    final watch = _stopwatchFactory()..start();
-    for (var step = 0; step < stepCount; step++) {
-      if (_disposed || generation != _generation) return;
-      final targetStart = kStepBeatInterval * step;
-      final waitBeforeStep = targetStart - watch.elapsed;
-      if (waitBeforeStep > Duration.zero) {
-        await _delay(waitBeforeStep);
-        if (_disposed || generation != _generation) return;
-      }
-      if (step > 0) {
-        await _player.pause();
-        await _player.seek(Duration.zero);
-        if (_disposed || generation != _generation) return;
-      }
-      await _player.play();
-    }
-
-    final totalRunWindow = kStepBeatInterval * stepCount;
-    final tailWait = totalRunWindow - watch.elapsed;
-    if (tailWait > Duration.zero && !_disposed && generation == _generation) {
-      await _delay(tailWait);
-    }
+  }) {
+    return PacedStepRunner(
+      driver: _JaStepClipDriver(_player),
+      stopwatchFactory: _stopwatchFactory,
+      delay: _delay,
+    ).run(
+      assetPath: assetPath,
+      stepCount: stepCount,
+      cancelled: () => _disposed || generation != _generation,
+    );
   }
 
   @override

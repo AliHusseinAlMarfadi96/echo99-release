@@ -49,6 +49,12 @@ class VoiceRoom {
   bool sharingAudio = false;
   void Function()? onPeerLost;
 
+  /// Single-flight connect state: concurrent connectVoice calls for the same
+  /// table share one in-flight connection instead of disconnecting each other.
+  Future<String?>? _connectingFuture;
+  String? _connectingTableId;
+  int _connectGeneration = 0;
+
   /// Identities currently host-muted (from Firestore seat flags).
   Set<String> _hostMuted = {};
 
@@ -102,6 +108,37 @@ class VoiceRoom {
       await _applyRemoteMutes();
       return null;
     }
+    // Coalesce concurrent connectVoice calls targeting the exact same tableId
+    // (e.g. setMicrophone while joinAsListener is still connecting).
+    if (_connectingFuture != null && _connectingTableId == tableId) {
+      return _connectingFuture!;
+    }
+
+    final generation = ++_connectGeneration;
+    _connectingTableId = tableId;
+    final future = _performConnectVoice(
+      identity: identity,
+      displayName: displayName,
+      tableId: tableId,
+      generation: generation,
+    );
+    _connectingFuture = future;
+    try {
+      return await future;
+    } finally {
+      if (_connectGeneration == generation) {
+        _connectingFuture = null;
+        _connectingTableId = null;
+      }
+    }
+  }
+
+  Future<String?> _performConnectVoice({
+    required String identity,
+    required String displayName,
+    required String tableId,
+    required int generation,
+  }) async {
     String? token;
     if (_useServerTokens) {
       final call = serverTokenCall;
@@ -123,12 +160,38 @@ class VoiceRoom {
     if (token == null) {
       return unconfigured;
     }
+    if (generation != _connectGeneration) {
+      return null;
+    }
     await _room?.disconnect();
     await _room?.dispose();
+    if (generation != _connectGeneration) {
+      return null;
+    }
     final room = Room();
     _room = room;
     _tableId = tableId;
-    await room.connect(LiveKitConfig.url, token);
+    try {
+      await room.connect(LiveKitConfig.url, token);
+    } catch (_) {
+      if (_room == room) {
+        _room = null;
+        _tableId = null;
+      }
+      try {
+        await room.dispose();
+      } catch (_) {}
+      rethrow;
+    }
+    if (generation != _connectGeneration || _room != room) {
+      // Stale connect: a newer connect or close() owns _room now. Clean up
+      // only our own room; dispose may already have run via close().
+      try {
+        await room.disconnect();
+        await room.dispose();
+      } catch (_) {}
+      return null;
+    }
     // Listener by default: never auto-publish the microphone.
     await room.localParticipant?.setMicrophoneEnabled(false);
     micOn = false;
@@ -149,10 +212,20 @@ class VoiceRoom {
           onPeerLost?.call();
         }
       })
+      ..on<TrackPublishedEvent>((_) {
+        unawaited(_applyRemoteMutes());
+      })
+      ..on<TrackUnmutedEvent>((_) {
+        unawaited(_applyRemoteMutes());
+      })
       ..on<TrackSubscribedEvent>((event) {
         unawaited(_applyRemoteMutes());
       })
       ..on<ParticipantConnectedEvent>((_) {
+        unawaited(_applyRemoteMutes());
+        _emitRoster();
+      })
+      ..on<RoomReconnectedEvent>((_) {
         unawaited(_applyRemoteMutes());
         _emitRoster();
       })
@@ -206,12 +279,56 @@ class VoiceRoom {
   Future<String?> warmup({
     required String identity,
     required String displayName,
-  }) {
+  }) async {
+    // Never hijack or disconnect an active/connecting game table room.
+    // An in-flight connect owns the guard over the last settled room:
+    // while table_X is connecting, _tableId may still say echo99lobby.
+    final activeTable = _connectingTableId ?? _tableId;
+    if (activeTable != null && activeTable != 'echo99lobby') {
+      return null;
+    }
     return connectVoice(
       identity: identity,
       displayName: displayName,
       tableId: 'echo99lobby',
     );
+  }
+
+  /// Test seam: unit tests cannot drive a real in-flight LiveKit connect,
+  /// so they set the guard-relevant room state directly.
+  @visibleForTesting
+  void debugSetActiveRooms({String? tableId, String? connectingTableId}) {
+    _tableId = tableId;
+    _connectingTableId = connectingTableId;
+  }
+
+  /// Read-only snapshot of local publication and remote subscription state.
+  Map<String, Object?> diagnosticSummary() {
+    final room = _room;
+    final localMicPub = room?.localParticipant?.getTrackPublicationBySource(
+      TrackSource.microphone,
+    );
+    var remoteAudioTracks = 0;
+    var subscribedAudioTracks = 0;
+    if (room != null) {
+      for (final p in room.remoteParticipants.values) {
+        for (final pub in p.audioTrackPublications) {
+          remoteAudioTracks++;
+          if (pub.subscribed) subscribedAudioTracks++;
+        }
+      }
+    }
+    return <String, Object?>{
+      'tableId': _tableId,
+      'connected': connected,
+      'micOn': micOn,
+      'canPublish': serverAllowsPublish,
+      'localMicSid': localMicPub?.sid,
+      'localMicMuted': localMicPub?.muted,
+      'remoteParticipants': room?.remoteParticipants.length ?? 0,
+      'remoteAudioTracks': remoteAudioTracks,
+      'subscribedAudioTracks': subscribedAudioTracks,
+    };
   }
 
   /// Listener first; auto-publishing requires a saved opt-in. OS permission
@@ -378,6 +495,9 @@ class VoiceRoom {
 
   Future<void> close() async {
     _micRequest++;
+    _connectGeneration++;
+    _connectingFuture = null;
+    _connectingTableId = null;
     GameAudioPolicy.shared.captureRequested = false;
     onPeerLost = null;
     try {

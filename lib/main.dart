@@ -30,12 +30,73 @@ import 'services/voice_authority.dart';
 import 'services/voice_room.dart';
 import 'services/voice_token_transport.dart';
 
+class BootStageSample {
+  const BootStageSample(this.stage, this.elapsedMs, this.deltaMs);
+  final String stage;
+  final int elapsedMs;
+  final int deltaMs;
+}
+
+/// In-memory boot diagnostics: keeps per-stage timings so an in-app spoken
+/// report can name the slow stage without console access. Read-only; no
+/// files written, no network calls.
+class BootDiagnostics {
+  static final List<BootStageSample> _samples = <BootStageSample>[];
+  static int _lastMs = 0;
+  static int? firestoreLatencyMs;
+
+  static List<BootStageSample> get samples => List.unmodifiable(_samples);
+
+  static void record(String stage, int elapsedMs) {
+    final delta = elapsedMs - _lastMs;
+    _lastMs = elapsedMs;
+    _samples.add(BootStageSample(stage, elapsedMs, delta));
+  }
+
+  static int _deltaFor(String stagePrefix) {
+    for (final sample in _samples) {
+      if (sample.stage.startsWith(stagePrefix)) {
+        return sample.deltaMs;
+      }
+    }
+    return -1;
+  }
+
+  static String _sec(int ms) =>
+      ms < 0 ? 'غير مقاس' : '${(ms / 1000).toStringAsFixed(1)} ثانية';
+
+  /// Arabic summary for a screen reader naming which boot stage was slow.
+  static String spokenReport() {
+    if (_samples.isEmpty) {
+      return 'لم يسجل مجس الفتح أي بيانات بعد.';
+    }
+    final totalMs = _samples.last.elapsedMs;
+    final firebaseMs = _deltaFor('firebase ready');
+    final connectingAudioMs = _deltaFor('startupAudio.connecting');
+    final fixedDelayMs = _deltaFor('fixed delay done');
+    final reachMs = _deltaFor('reachServers');
+    final finishAudioMs = _deltaFor('startupAudio.finish');
+    final connectedClipMs = _deltaFor('connected clip done');
+
+    return 'تشخيص فتح التطبيق: الإجمالي ${_sec(totalMs)}. '
+        'فايربيس ${_sec(firebaseMs)}، '
+        'بدء صوت الانتظار ${_sec(connectingAudioMs)}، '
+        'تأخير ثابت ${_sec(fixedDelayMs)}، '
+        'فحص السيرفر ${_sec(reachMs)} '
+        '${firestoreLatencyMs != null ? "(زمن قاعدة البيانات $firestoreLatencyMs مللي ثانية)" : ""}، '
+        'إيقاف صوت الانتظار ${_sec(finishAudioMs)}، '
+        'نغمة الاتصال ${_sec(connectedClipMs)}.';
+  }
+}
+
 /// Read-only startup timing for the 15-20s app-open wait: one debugPrint
 /// per stage, no behavior, network, or UI change. Shared by main() and the
 /// app widget so every stage reads off one clock.
 final _bootWatch = Stopwatch()..start();
 void _bootMark(String stage) {
-  debugPrint('Echo99 boot probe: $stage @ ${_bootWatch.elapsedMilliseconds}ms');
+  final elapsed = _bootWatch.elapsedMilliseconds;
+  BootDiagnostics.record(stage, elapsed);
+  debugPrint('Echo99 boot probe: $stage @ ${elapsed}ms');
 }
 
 Future<void> main() async {
@@ -211,19 +272,24 @@ class _Echo99AppState extends State<Echo99App> with WidgetsBindingObserver {
     if (mounted) {
       setState(() => _gate = _Gate.connecting);
     }
+    _bootMark('link:start audible=$audible');
     if (audible) {
       await _startupAudio.connecting();
+      _bootMark('startupAudio.connecting done');
     }
     var ok = false;
     try {
       await Future<void>.delayed(const Duration(milliseconds: 2200));
       _bootMark('fixed delay done, probing');
       ok = await _reachServers().timeout(const Duration(seconds: 30));
+      BootDiagnostics.firestoreLatencyMs = _latencyMs;
       _bootMark('reachServers ok=$ok latencyMs=$_latencyMs');
     } catch (_) {
       ok = false;
+      _bootMark('reachServers exception');
     }
     await _startupAudio.finish();
+    _bootMark('startupAudio.finish done');
     _linking = false;
     if (!mounted || !_account.signedIn || _account.guest || _update.required) {
       return;
@@ -231,6 +297,7 @@ class _Echo99AppState extends State<Echo99App> with WidgetsBindingObserver {
     if (ok) {
       if (audible) {
         await _sounds.play('connected');
+        _bootMark('connected clip done');
       }
       if (!mounted) {
         return;
@@ -290,7 +357,11 @@ class _Echo99AppState extends State<Echo99App> with WidgetsBindingObserver {
           displayName: widget.settings.displayName,
         );
       } catch (_) {
-        await _voice.close();
+        // A failed lobby warmup must never tear down an active table room.
+        final table = _voice.diagnosticSummary()['tableId'];
+        if (table == null || table == 'echo99lobby') {
+          await _voice.close();
+        }
         rethrow;
       }
     });

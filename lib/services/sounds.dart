@@ -52,13 +52,15 @@ int sequenceLengthMs(List<ScheduledClip> plan) {
 class PresentationCancelled implements Exception {}
 
 class SoundBoard {
-  SoundBoard({SoundPlayer Function()? playerFactory})
-    : _playerFactory = playerFactory ?? ManagedSoundPlayer.new {
+  SoundBoard({SoundPlayer Function()? playerFactory, Stopwatch Function()? stopwatchFactory})
+    : _playerFactory = playerFactory ?? ManagedSoundPlayer.new,
+      _stopwatchFactory = stopwatchFactory ?? Stopwatch.new {
     _a = _playerFactory();
     _b = _playerFactory();
     _loop = _playerFactory();
   }
   final SoundPlayer Function() _playerFactory;
+  final Stopwatch Function() _stopwatchFactory;
 
   late final SoundPlayer _a;
   late final SoundPlayer _b;
@@ -71,6 +73,7 @@ class SoundBoard {
   var _flip = false;
   var _disposed = false;
   int _presentationGeneration = 0;
+  int _loopGeneration = 0;
   Completer<void> _cancelPresentation = Completer<void>();
 
   /// Game sequences are queued so two table updates never overlap.
@@ -89,15 +92,18 @@ class SoundBoard {
     if (!events.contains(name) || _disposed) {
       return;
     }
+    final generation = ++_loopGeneration;
     try {
       await _loop.stop();
-      if (_disposed) return;
+      if (_disposed || generation != _loopGeneration) return;
       await _initCtx();
+      if (_disposed || generation != _loopGeneration) return;
       await _loop.playAsset(_asset(name), loop: repeat);
     } catch (_) {}
   }
 
   Future<void> stopLoop() async {
+    _loopGeneration++;
     try {
       await _loop.stop();
     } catch (_) {}
@@ -173,7 +179,7 @@ class SoundBoard {
           ),
         ]).timeout(_boundFor(valid));
       } else {
-        final stepWatch = Stopwatch();
+        final stepWatch = _stopwatchFactory();
         var stepRunIndex = 0;
         for (var i = 0; i < valid.length; i++) {
           if (_disposed) return;
