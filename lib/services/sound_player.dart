@@ -31,13 +31,32 @@ abstract class SequenceSoundPlayer implements SoundPlayer {
   Future<void> playAssets(List<String> paths);
 }
 
+/// Uniform 250 BPM movement cadence (240ms start-to-start across all colors).
+const Duration kStepBeatInterval = Duration(milliseconds: 240);
+
+bool isStepAssetPath(String path) =>
+    path == 'sounds/jk_step1.mp3' ||
+    path == 'sounds/jk_step2.mp3' ||
+    path == 'sounds/jk_step_back1.mp3' ||
+    path == 'sounds/jk_step_back2.mp3';
+
 class ManagedSoundPlayer implements SequenceSoundPlayer {
-  ManagedSoundPlayer({Future<void> Function()? prepareSession})
-    : _prepareSession = prepareSession ?? prepareIdleSoundSession;
+  ManagedSoundPlayer({
+    Future<void> Function()? prepareSession,
+    ja.AudioPlayer? player,
+    Stopwatch Function()? stopwatchFactory,
+    Future<void> Function(Duration)? delay,
+  })  : _prepareSession = prepareSession ?? prepareIdleSoundSession,
+        _player = player ??
+            ja.AudioPlayer(
+              handleAudioSessionActivation: false,
+            ),
+        _stopwatchFactory = stopwatchFactory ?? Stopwatch.new,
+        _delay = delay ?? Future<void>.delayed;
   final Future<void> Function() _prepareSession;
-  final ja.AudioPlayer _player = ja.AudioPlayer(
-    handleAudioSessionActivation: false,
-  );
+  final ja.AudioPlayer _player;
+  final Stopwatch Function() _stopwatchFactory;
+  final Future<void> Function(Duration) _delay;
   bool _disposed = false;
   int _generation = 0;
 
@@ -76,28 +95,92 @@ class ManagedSoundPlayer implements SequenceSoundPlayer {
   @override
   Future<void> playAssets(List<String> paths) async {
     final generation = ++_generation;
-    if (_disposed) return;
+    if (_disposed || paths.isEmpty) return;
     try {
       await _prepareSession();
       if (_disposed || generation != _generation) return;
       await _player.setLoopMode(ja.LoopMode.off);
-      await _player.setAudioSources([
-        for (final path in paths)
-          if (path == 'sounds/jk_burn_cards.mp3')
-            ja.ClippingAudioSource(
-              child: ja.AudioSource.asset('assets/$path'),
-              start: Duration.zero,
-              end: const Duration(milliseconds: 752),
-            )
-          else
-            ja.AudioSource.asset('assets/$path'),
-      ]);
-      if (_disposed || generation != _generation) return;
       SoundDiagnostics.lastFailure.value = null;
-      await _player.play();
+
+      var index = 0;
+      while (index < paths.length) {
+        if (_disposed || generation != _generation) return;
+        final current = paths[index];
+
+        if (isStepAssetPath(current)) {
+          var runEnd = index + 1;
+          while (runEnd < paths.length && paths[runEnd] == current) {
+            runEnd++;
+          }
+          await _playPacedStepRun(
+            assetPath: current,
+            stepCount: runEnd - index,
+            generation: generation,
+          );
+          index = runEnd;
+        } else {
+          var runEnd = index + 1;
+          while (runEnd < paths.length && !isStepAssetPath(paths[runEnd])) {
+            runEnd++;
+          }
+          await _player.pause();
+          if (_disposed || generation != _generation) return;
+          await _player.setAudioSources([
+            for (final path in paths.sublist(index, runEnd))
+              if (path == 'sounds/jk_burn_cards.mp3')
+                ja.ClippingAudioSource(
+                  child: ja.AudioSource.asset('assets/$path'),
+                  start: Duration.zero,
+                  end: const Duration(milliseconds: 752),
+                )
+              else
+                ja.AudioSource.asset('assets/$path'),
+          ]);
+          if (_disposed || generation != _generation) return;
+          await _player.play();
+          index = runEnd;
+        }
+      }
     } catch (error) {
       SoundDiagnostics.record('asset-load', error);
       rethrow;
+    }
+  }
+
+  /// Plays [stepCount] identical movement clips at exactly 250 BPM (240ms
+  /// start-to-start) from the original asset, untruncated and at 1.0x speed:
+  /// the longest step clip is 216ms < 240ms, so no clip is cut or overlapped.
+  Future<void> _playPacedStepRun({
+    required String assetPath,
+    required int stepCount,
+    required int generation,
+  }) async {
+    await _player.pause();
+    if (_disposed || generation != _generation) return;
+    await _player.setAsset('assets/$assetPath');
+    if (_disposed || generation != _generation) return;
+
+    final watch = _stopwatchFactory()..start();
+    for (var step = 0; step < stepCount; step++) {
+      if (_disposed || generation != _generation) return;
+      final targetStart = kStepBeatInterval * step;
+      final waitBeforeStep = targetStart - watch.elapsed;
+      if (waitBeforeStep > Duration.zero) {
+        await _delay(waitBeforeStep);
+        if (_disposed || generation != _generation) return;
+      }
+      if (step > 0) {
+        await _player.pause();
+        await _player.seek(Duration.zero);
+        if (_disposed || generation != _generation) return;
+      }
+      await _player.play();
+    }
+
+    final totalRunWindow = kStepBeatInterval * stepCount;
+    final tailWait = totalRunWindow - watch.elapsed;
+    if (tailWait > Duration.zero && !_disposed && generation == _generation) {
+      await _delay(tailWait);
     }
   }
 

@@ -132,13 +132,23 @@ class SoundBoard {
     return run;
   }
 
+  static bool _isStepSound(String name) =>
+      name == 'jk_step1' ||
+      name == 'jk_step2' ||
+      name == 'jk_step_back1' ||
+      name == 'jk_step_back2';
+
   /// How long playback of [valid] may legitimately take, plus slack for
   /// session negotiation. A native stall must fail fast: an unbounded wait
   /// freezes the whole presentation queue (bots, turn timer, turn tone).
+  /// Step clips occupy a full 240ms beat slot even though the files are
+  /// shorter (216ms/120ms), so long moves never outrun the bound.
   static Duration _boundFor(List<String> valid) {
     var totalMs = 0.0;
     for (var i = 0; i < valid.length; i++) {
-      totalMs += (soundDurationsMs[valid[i]] ?? 1500);
+      final name = valid[i];
+      final clipMs = (soundDurationsMs[name] ?? 1500).toDouble();
+      totalMs += (_isStepSound(name) && clipMs < 240.0) ? 240.0 : clipMs;
     }
     return Duration(milliseconds: totalMs.round() + 4000);
   }
@@ -163,9 +173,35 @@ class SoundBoard {
           ),
         ]).timeout(_boundFor(valid));
       } else {
+        final stepWatch = Stopwatch();
+        var stepRunIndex = 0;
         for (var i = 0; i < valid.length; i++) {
           if (_disposed) return;
           final name = valid[i];
+          final isStep = _isStepSound(name);
+          if (isStep) {
+            if (stepRunIndex == 0) {
+              stepWatch
+                ..reset()
+                ..start();
+            } else {
+              final target = kStepBeatInterval * stepRunIndex;
+              final wait = target - stepWatch.elapsed;
+              if (wait > Duration.zero) {
+                await Future<void>.delayed(wait);
+                if (_disposed) return;
+              }
+            }
+            stepRunIndex++;
+          } else if (stepRunIndex > 0) {
+            final tail = (kStepBeatInterval * stepRunIndex) - stepWatch.elapsed;
+            if (tail > Duration.zero) {
+              await Future<void>.delayed(tail);
+              if (_disposed) return;
+            }
+            stepRunIndex = 0;
+            stepWatch.stop();
+          }
           final done = player.completed.first;
           await player.playAsset(_asset(name));
           await Future.any([
@@ -174,6 +210,12 @@ class SoundBoard {
               (_) => throw PresentationCancelled(),
             ),
           ]).timeout(_boundFor([name]));
+        }
+        if (stepRunIndex > 0 && !_disposed) {
+          final tail = (kStepBeatInterval * stepRunIndex) - stepWatch.elapsed;
+          if (tail > Duration.zero) {
+            await Future<void>.delayed(tail);
+          }
         }
       }
     } catch (error) {
