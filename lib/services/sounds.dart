@@ -147,14 +147,14 @@ class SoundBoard {
   /// How long playback of [valid] may legitimately take, plus slack for
   /// session negotiation. A native stall must fail fast: an unbounded wait
   /// freezes the whole presentation queue (bots, turn timer, turn tone).
-  /// Step clips occupy a full 240ms beat slot even though the files are
-  /// shorter (216ms/120ms), so long moves never outrun the bound.
+  /// Step clips always occupy one 170ms beat slot (tail clipped at the
+  /// window), so long moves never outrun the bound.
   static Duration _boundFor(List<String> valid) {
     var totalMs = 0.0;
     for (var i = 0; i < valid.length; i++) {
       final name = valid[i];
       final clipMs = (soundDurationsMs[name] ?? 1500).toDouble();
-      totalMs += (_isStepSound(name) && clipMs < 240.0) ? 240.0 : clipMs;
+      totalMs += _isStepSound(name) ? 170.0 : clipMs;
     }
     return Duration(milliseconds: totalMs.round() + 4000);
   }

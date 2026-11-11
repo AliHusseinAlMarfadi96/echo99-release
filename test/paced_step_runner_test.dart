@@ -1,4 +1,3 @@
-
 import 'package:echo99/services/sound_player.dart';
 import 'package:fake_async/fake_async.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -46,37 +45,64 @@ class _FakeStopwatch implements Stopwatch {
 
 /// Fake driver: play() blocks for the clip duration on the fake clock,
 /// mimicking just_audio's play() completing only at clip end or stop.
+/// Honors the requested clip tail (completion at clipEnd when shorter);
+/// [stall] simulates a native completion signal arriving late regardless.
 class _FakeDriver implements StepClipDriver {
-  _FakeDriver({required this.clockMs, required this.clipDurationMs});
+  _FakeDriver({
+    required this.clockMs,
+    required this.clipDurationMs,
+    this.stall = false,
+    this.ipcMs = 0,
+    this.completionLatencyMs = 0,
+  });
   final int Function() clockMs;
   final int clipDurationMs;
+  final bool stall;
+
+  /// Simulated platform-channel cost of a pause/seek call.
+  final int ipcMs;
+
+  /// Simulated delay of the native playback-completed signal past the
+  /// (clipped) clip end.
+  final int completionLatencyMs;
   final List<String> events = <String>[];
+  Duration? lastClipEnd;
 
   @override
   Future<void> pause() async {
     events.add('pause@${clockMs()}ms');
+    await Future<void>.delayed(Duration(milliseconds: ipcMs));
   }
 
   @override
-  Future<void> setAsset(String asset) async {
-    events.add('setAsset:$asset@${clockMs()}ms');
+  Future<void> setClip(String asset, {Duration? clipEnd}) async {
+    lastClipEnd = clipEnd;
+    events.add('setClip:$asset@${clockMs()}ms');
   }
 
   @override
   Future<void> seek(Duration position) async {
     events.add('seek@${clockMs()}ms');
+    await Future<void>.delayed(Duration(milliseconds: ipcMs));
   }
 
   @override
   Future<void> play() async {
     events.add('play@${clockMs()}ms');
-    await Future<void>.delayed(Duration(milliseconds: clipDurationMs));
+    var durationMs = clipDurationMs;
+    final end = lastClipEnd;
+    if (!stall && end != null && end.inMilliseconds < durationMs) {
+      durationMs = end.inMilliseconds;
+    }
+    await Future<void>.delayed(
+      Duration(milliseconds: durationMs + completionLatencyMs),
+    );
   }
 }
 
 void main() {
   test(
-    'production paced step run fires plays at exact 240ms starts and holds the run window',
+    'production paced step run fires plays at exact 170ms starts and holds the run window',
     () {
       fakeAsync((async) {
         final origin = async.getClock(DateTime.utc(2026, 1, 1)).now();
@@ -103,12 +129,15 @@ void main() {
             )
             .then((_) => finished = true);
 
-        async.elapse(const Duration(milliseconds: 959));
-        expect(finished, isFalse, reason: 'run window is 4 x 240ms = 960ms');
+        async.elapse(const Duration(milliseconds: 679));
+        expect(finished, isFalse, reason: 'run window is 4 x 170ms = 680ms');
         expect(
           driver.events.where((e) => e.startsWith('play@')),
-          equals(<String>['play@0ms', 'play@240ms', 'play@480ms', 'play@720ms']),
+          equals(<String>['play@0ms', 'play@170ms', 'play@340ms', 'play@510ms']),
         );
+        // The 216ms clip is clipped at kStepClipEnd (140ms), inside the
+        // 170ms beat window, leaving headroom for completion + IPC.
+        expect(driver.lastClipEnd, kStepClipEnd);
         // Each step after the first rewinds to the clip start before playing.
         expect(
           driver.events.where((e) => e.startsWith('seek@')).length,
@@ -117,6 +146,74 @@ void main() {
 
         async.elapse(const Duration(milliseconds: 1));
         expect(finished, isTrue);
+      });
+    },
+  );
+
+  test(
+    '140ms clip margin absorbs simulated completion + IPC latency: cadence stays uniform',
+    () {
+      fakeAsync((async) {
+        final origin = async.getClock(DateTime.utc(2026, 1, 1)).now();
+        int elapsedMs() => async
+            .getClock(DateTime.utc(2026, 1, 1))
+            .now()
+            .difference(origin)
+            .inMilliseconds;
+
+        // Simulated iOS overhead: the play() future resolves 8ms after the
+        // clipped end (completion notification), and each pause/seek costs
+        // 6ms of platform-channel time. Per step that is 140 + 8 + 6 + 6 =
+        // 160ms < 170ms, so the grid must absorb it instead of compounding.
+        final driver = _FakeDriver(
+          clockMs: elapsedMs,
+          clipDurationMs: 216,
+          ipcMs: 6,
+          completionLatencyMs: 8,
+        );
+        final runner = PacedStepRunner(
+          driver: driver,
+          stopwatchFactory: () => _FakeStopwatch(
+            () => async.getClock(DateTime.utc(2026, 1, 1)).now(),
+          ),
+        );
+
+        var finished = false;
+        runner
+            .run(
+              assetPath: 'sounds/jk_step1.mp3',
+              stepCount: 4,
+              cancelled: () => false,
+            )
+            .then((_) => finished = true);
+
+        async.elapse(const Duration(milliseconds: 1200));
+        expect(finished, isTrue);
+
+        final starts = driver.events
+            .where((e) => e.startsWith('play@'))
+            .map((e) => int.parse(e.substring(5, e.length - 2)))
+            .toList();
+        expect(starts.length, 4);
+        // After the first step, every start waits out its grid boundary and
+        // then pays only the pause/seek IPC, so consecutive starts are
+        // exactly one beat apart: uniform 170ms cadence under latency.
+        // (With clipEnd == 170ms the same latency would make every step
+        // cost 170 + 8 + 12 = 190ms with no grid room left, so the cadence
+        // itself would slow to 190ms per step; the margin prevents that.)
+        for (var i = 2; i < starts.length; i++) {
+          expect(
+            starts[i] - starts[i - 1],
+            kStepBeatInterval.inMilliseconds,
+            reason: 'uniform cadence under simulated latency',
+          );
+        }
+        // The first interval carries the pause/seek IPC past the grid
+        // boundary; it must never exceed beat + 2 * ipc.
+        expect(
+          starts[1] - starts[0],
+          lessThanOrEqualTo(kStepBeatInterval.inMilliseconds + 12),
+        );
       });
     },
   );
@@ -130,7 +227,13 @@ void main() {
           .difference(origin)
           .inMilliseconds;
 
-      final driver = _FakeDriver(clockMs: elapsedMs, clipDurationMs: 500);
+      // stall: the native completion signal arrives at 500ms even though the
+      // clip is windowed at 170ms (abnormal; must never overlap).
+      final driver = _FakeDriver(
+        clockMs: elapsedMs,
+        clipDurationMs: 500,
+        stall: true,
+      );
       final runner = PacedStepRunner(
         driver: driver,
         stopwatchFactory: () => _FakeStopwatch(

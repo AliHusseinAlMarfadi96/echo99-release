@@ -31,8 +31,22 @@ abstract class SequenceSoundPlayer implements SoundPlayer {
   Future<void> playAssets(List<String> paths);
 }
 
-/// Uniform 250 BPM movement cadence (240ms start-to-start across all colors).
-const Duration kStepBeatInterval = Duration(milliseconds: 240);
+/// Uniform ~353 BPM movement cadence (170ms start-to-start across all
+/// colors), matched to the user's TableEx reference recordings (measured
+/// step-to-step median 170ms).
+const Duration kStepBeatInterval = Duration(milliseconds: 170);
+
+/// Where a step clip's tail is cut. just_audio's play() future completes
+/// only when playback completes (verified in just_audio 0.10.6 docs), and
+/// the completion signal plus the following pause/seek cross the platform
+/// channel, so a clip that runs the full beat would start the next step
+/// late and drag that color off the shared grid. All four step assets end
+/// their audible content by ~80ms (long clips by ~45ms, measured on
+/// decoded PCM, 5ms windows, -45dB threshold), so cutting at 140ms keeps
+/// every audible sample while leaving ~30ms of silent headroom for the
+/// completion + IPC round trip before the next 170ms beat. For clips
+/// shorter than this the clip is a no-op.
+const Duration kStepClipEnd = Duration(milliseconds: 140);
 
 bool isStepAssetPath(String path) =>
     path == 'sounds/jk_step1.mp3' ||
@@ -45,15 +59,21 @@ bool isStepAssetPath(String path) =>
 /// production pacing logic runs without platform channels.
 abstract class StepClipDriver {
   Future<void> pause();
-  Future<void> setAsset(String asset);
+
+  /// Loads [asset], optionally clipping its tail at [clipEnd]. Step clips
+  /// are clipped to the beat window: jk_step1's audible click ends within
+  /// ~50ms and the rest of its 216ms container is digital silence
+  /// (measured), so clipping keeps the cadence uniform across colors
+  /// without cutting audible sound.
+  Future<void> setClip(String asset, {Duration? clipEnd});
   Future<void> seek(Duration position);
   Future<void> play();
 }
 
-/// Plays identical movement clips at exactly 250 BPM (240ms start-to-start)
-/// from the original asset, untruncated and at 1.0x speed: the longest step
-/// clip is 216ms < 240ms, so no clip is cut or overlapped. Extracted from
-/// ManagedSoundPlayer so the cadence is unit-testable.
+/// Plays identical movement clips at the [kStepBeatInterval] cadence
+/// (start-to-start) from the original asset at natural 1.0x speed, with the
+/// tail clipped at the beat window (see [StepClipDriver.setClip]).
+/// Extracted from ManagedSoundPlayer so the cadence is unit-testable.
 class PacedStepRunner {
   factory PacedStepRunner({
     required StepClipDriver driver,
@@ -80,7 +100,10 @@ class PacedStepRunner {
   }) async {
     await _driver.pause();
     if (cancelled()) return;
-    await _driver.setAsset('assets/$assetPath');
+    await _driver.setClip(
+      'assets/$assetPath',
+      clipEnd: kStepClipEnd,
+    );
     if (cancelled()) return;
 
     final watch = _stopwatchFactory()..start();
@@ -114,7 +137,16 @@ class _JaStepClipDriver implements StepClipDriver {
   @override
   Future<void> pause() => _player.pause();
   @override
-  Future<void> setAsset(String asset) => _player.setAsset(asset);
+  Future<void> setClip(String asset, {Duration? clipEnd}) =>
+      _player.setAudioSource(
+        clipEnd == null
+            ? ja.AudioSource.asset(asset)
+            : ja.ClippingAudioSource(
+                child: ja.AudioSource.asset(asset),
+                start: Duration.zero,
+                end: clipEnd,
+              ),
+      );
   @override
   Future<void> seek(Duration position) => _player.seek(position);
   @override
@@ -228,8 +260,8 @@ class ManagedSoundPlayer implements SequenceSoundPlayer {
     }
   }
 
-  /// Plays [stepCount] identical movement clips at exactly 250 BPM via
-  /// [PacedStepRunner]; see that class for the cadence contract.
+  /// Plays [stepCount] identical movement clips at the [kStepBeatInterval]
+  /// cadence via [PacedStepRunner]; see that class for the cadence contract.
   Future<void> _playPacedStepRun({
     required String assetPath,
     required int stepCount,

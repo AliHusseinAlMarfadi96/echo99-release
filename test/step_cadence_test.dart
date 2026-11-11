@@ -49,7 +49,10 @@ class _FakeStopwatch implements Stopwatch {
 
 /// Records each clip's start time and completes it after its duration,
 /// all on the fakeAsync clock. Implements only [SoundPlayer] so the board
-/// takes the per-clip fallback path (where the pacing loop lives).
+/// takes the per-clip fallback path (where the pacing loop lives). The
+/// fallback interface cannot clip tails, so a clip longer than the 170ms
+/// beat (jk_step1, 216ms) serializes at its own duration here; production
+/// clips the tail via PacedStepRunner and stays on the beat.
 class _TimedFakePlayer implements SoundPlayer {
   _TimedFakePlayer({
     required this.clockMs,
@@ -85,10 +88,15 @@ class _TimedFakePlayer implements SoundPlayer {
 }
 
 void main() {
-  for (final stepClip in <String>['jk_step1', 'jk_step2']) {
+  // (clip, expected step starts, jk_kill start, total presentation time)
+  const cases = <(String, List<int>, int, int)>[
+    ('jk_step1', [0, 216, 432, 648], 864, 1896), // 216ms > beat: serialized
+    ('jk_step2', [0, 170, 340, 510], 680, 1712), // 120ms < beat: on the beat
+  ];
+  for (final (stepClip, stepStarts, killStart, totalMs) in cases) {
     test(
-      '$stepClip paces at exact 240ms starts and delays the result clip '
-      'until the last step completes (fallback path)',
+      '$stepClip paces at the 170ms beat (clamped to clip length) and delays '
+      'the result clip until the last step completes (fallback path)',
       () {
         fakeAsync((async) {
           final origin = async.getClock(DateTime.utc(2026, 1, 1)).now();
@@ -126,8 +134,7 @@ void main() {
               ])
               .then((_) => finished = true);
 
-          // 4 steps x 240ms + jk_kill (1032ms) = 1992ms total.
-          async.elapse(const Duration(milliseconds: 959));
+          async.elapse(Duration(milliseconds: killStart - 1));
           expect(
             finished,
             isFalse,
@@ -136,23 +143,20 @@ void main() {
           expect(
             startLog,
             equals(<String>[
-              'sounds/$stepClip.mp3@0ms',
-              'sounds/$stepClip.mp3@240ms',
-              'sounds/$stepClip.mp3@480ms',
-              'sounds/$stepClip.mp3@720ms',
+              for (final t in stepStarts) 'sounds/$stepClip.mp3@${t}ms',
             ]),
-            reason: '$stepClip must fire at exact 240ms start-to-start',
+            reason: '$stepClip starts must follow the beat (never faster)',
           );
 
           async.elapse(const Duration(milliseconds: 1));
           expect(
             startLog.last,
-            'sounds/jk_kill.mp3@960ms',
+            'sounds/jk_kill.mp3@${killStart}ms',
             reason: 'result clip starts only after the last step slot ends',
           );
           expect(finished, isFalse, reason: 'jk_kill still playing');
 
-          async.elapse(const Duration(milliseconds: 1032));
+          async.elapse(Duration(milliseconds: totalMs - killStart));
           expect(finished, isTrue);
         });
       },
@@ -192,13 +196,13 @@ void main() {
 
       async.elapse(const Duration(milliseconds: 500));
       // Step 2 starts immediately once the late step 1 completes
-      // (its 240ms slot already passed; pacing never rewinds time).
+      // (its 170ms slot already passed; pacing never rewinds time).
       expect(startLog, <String>[
         'sounds/jk_step1.mp3@0ms',
         'sounds/jk_step1.mp3@500ms',
       ]);
 
-      // Tail: run window = 2 x 240ms = 480ms, already passed, so jk_kill
+      // Tail: run window = 2 x 170ms = 340ms, already passed, so jk_kill
       // follows step 2's completion (500 + 500 = 1000ms).
       async.elapse(const Duration(milliseconds: 499));
       expect(startLog.length, 2);
