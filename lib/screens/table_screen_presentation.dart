@@ -796,10 +796,7 @@ class _TableScreenState extends State<TableScreen> with WidgetsBindingObserver {
     }
     final clips = presentationClips(prev, next, me);
     try {
-      await scope.sounds.playNow(
-        clips,
-        speeds: [for (final clip in clips) clipPlaybackSpeed(clip)],
-      );
+      await scope.sounds.playNow(clips);
     } catch (error) {
       if (error is PresentationCancelled) rethrow;
       // A failed movement sequence must not swallow the turn cue or freeze

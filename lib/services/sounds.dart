@@ -133,28 +133,19 @@ class SoundBoard {
   }
 
   /// How long playback of [valid] may legitimately take, plus slack for
-  /// session negotiation. [speeds] shortens the budget for rate-adjusted
-  /// clips so the stall bound never cuts a real (faster) sequence short and
-  /// never waits the unsped duration either. A native stall must fail fast:
-  /// an unbounded wait freezes the whole presentation queue (bots, turn
-  /// timer, turn tone).
-  static Duration _boundFor(List<String> valid, [List<double>? speeds]) {
+  /// session negotiation. A native stall must fail fast: an unbounded wait
+  /// freezes the whole presentation queue (bots, turn timer, turn tone).
+  static Duration _boundFor(List<String> valid) {
     var totalMs = 0.0;
     for (var i = 0; i < valid.length; i++) {
-      final speed =
-          (speeds != null && i < speeds.length && speeds[i] > 0)
-              ? speeds[i]
-              : 1.0;
-      totalMs += (soundDurationsMs[valid[i]] ?? 1500) / speed;
+      totalMs += (soundDurationsMs[valid[i]] ?? 1500);
     }
     return Duration(milliseconds: totalMs.round() + 4000);
   }
 
   /// Native completion, not a duration estimate, advances the game queue.
   /// A missing completion times out as a failure, never as successful playback.
-  /// [speeds], parallel to [names], sets a per-clip whole-file rate (movement
-  /// steps play faster without truncation).
-  Future<void> playNow(List<String> names, {List<double>? speeds}) async {
+  Future<void> playNow(List<String> names) async {
     if (_disposed) return;
     final valid = [
       for (final n in names)
@@ -166,26 +157,23 @@ class SoundBoard {
     try {
       if (player is SequenceSoundPlayer) {
         await Future.any([
-          player.playAssets([for (final n in valid) _asset(n)], speeds: speeds),
+          player.playAssets([for (final n in valid) _asset(n)]),
           _cancelPresentation.future.then<void>(
             (_) => throw PresentationCancelled(),
           ),
-        ]).timeout(_boundFor(valid, speeds));
+        ]).timeout(_boundFor(valid));
       } else {
         for (var i = 0; i < valid.length; i++) {
           if (_disposed) return;
           final name = valid[i];
           final done = player.completed.first;
-          await player.playAsset(
-            _asset(name),
-            speed: speeds != null && i < speeds.length ? speeds[i] : null,
-          );
+          await player.playAsset(_asset(name));
           await Future.any([
             done,
             _cancelPresentation.future.then<void>(
               (_) => throw PresentationCancelled(),
             ),
-          ]).timeout(_boundFor([name], speeds != null && i < speeds.length ? [speeds[i]] : null));
+          ]).timeout(_boundFor([name]));
         }
       }
     } catch (error) {

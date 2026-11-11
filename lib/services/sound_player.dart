@@ -20,7 +20,7 @@ class SoundDiagnostics {
 
 abstract class SoundPlayer {
   Stream<void> get completed;
-  Future<void> playAsset(String path, {bool loop = false, double? speed});
+  Future<void> playAsset(String path, {bool loop = false});
   Future<void> stop();
   Future<void> dispose();
 }
@@ -28,9 +28,7 @@ abstract class SoundPlayer {
 /// Supported activation opt-out: this player never owns the RTC session.
 /// Audio interruption/noisy-route handling remains enabled in just_audio.
 abstract class SequenceSoundPlayer implements SoundPlayer {
-  /// [speeds], when given, is parallel to [paths]: a per-clip playback rate
-  /// so movement steps play faster as whole clips, never truncated.
-  Future<void> playAssets(List<String> paths, {List<double>? speeds});
+  Future<void> playAssets(List<String> paths);
 }
 
 class ManagedSoundPlayer implements SequenceSoundPlayer {
@@ -49,7 +47,7 @@ class ManagedSoundPlayer implements SequenceSoundPlayer {
       .map((_) {});
 
   @override
-  Future<void> playAsset(String path, {bool loop = false, double? speed}) async {
+  Future<void> playAsset(String path, {bool loop = false}) async {
     final generation = ++_generation;
     if (_disposed) return;
     var stage = 'session';
@@ -61,10 +59,6 @@ class ManagedSoundPlayer implements SequenceSoundPlayer {
       stage = 'asset-load';
       await _player.setAsset('assets/$path');
       if (_disposed || generation != _generation) return;
-      if (speed != null && speed != 1.0) {
-        await _player.setSpeed(speed);
-        if (_disposed || generation != _generation) return;
-      }
       stage = 'play';
       SoundDiagnostics.lastFailure.value = null;
       // play completes on stop/end, not at playback start.
@@ -80,10 +74,9 @@ class ManagedSoundPlayer implements SequenceSoundPlayer {
   /// Preload one native playlist so short movement beats do not wait for a
   /// separate Dart load/start round trip on every square.
   @override
-  Future<void> playAssets(List<String> paths, {List<double>? speeds}) async {
+  Future<void> playAssets(List<String> paths) async {
     final generation = ++_generation;
     if (_disposed) return;
-    StreamSubscription<int?>? indexSub;
     try {
       await _prepareSession();
       if (_disposed || generation != _generation) return;
@@ -100,23 +93,11 @@ class ManagedSoundPlayer implements SequenceSoundPlayer {
             ja.AudioSource.asset('assets/$path'),
       ]);
       if (_disposed || generation != _generation) return;
-      if (speeds != null && speeds.isNotEmpty) {
-        // Whole-clip rate per playlist item: the full clip sounds, faster.
-        await _player.setSpeed(speeds[0]);
-        indexSub = _player.currentIndexStream.listen((index) {
-          final i = index ?? -1;
-          if (i >= 0 && i < speeds.length && !_disposed) {
-            unawaited(_player.setSpeed(speeds[i]));
-          }
-        });
-      }
       SoundDiagnostics.lastFailure.value = null;
       await _player.play();
     } catch (error) {
       SoundDiagnostics.record('asset-load', error);
       rethrow;
-    } finally {
-      await indexSub?.cancel();
     }
   }
 

@@ -25,7 +25,7 @@ class SilentPlayer implements SoundPlayer {
   @override
   Stream<void> get completed => const Stream.empty();
   @override
-  Future<void> playAsset(String path, {bool loop = false, double? speed}) async {}
+  Future<void> playAsset(String path, {bool loop = false}) async {}
   @override
   Future<void> stop() async {}
   @override

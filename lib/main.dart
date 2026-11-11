@@ -30,14 +30,25 @@ import 'services/voice_authority.dart';
 import 'services/voice_room.dart';
 import 'services/voice_token_transport.dart';
 
+/// Read-only startup timing for the 15-20s app-open wait: one debugPrint
+/// per stage, no behavior, network, or UI change. Shared by main() and the
+/// app widget so every stage reads off one clock.
+final _bootWatch = Stopwatch()..start();
+void _bootMark(String stage) {
+  debugPrint('Echo99 boot probe: $stage @ ${_bootWatch.elapsedMilliseconds}ms');
+}
+
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  _bootMark('binding');
   // Android/iOS start from the native google-services.json /
   // GoogleService-Info.plist; see bootFirebase for the fallback.
   final boot = await bootFirebase();
+  _bootMark('firebase ready=${boot.ready}');
   final firebaseReady = boot.ready;
   final firebaseError = boot.error;
   final settings = await SettingsModel.load();
+  _bootMark('settings');
   runApp(
     Echo99App(
       settings: settings,
@@ -128,7 +139,9 @@ class _Echo99AppState extends State<Echo99App> with WidgetsBindingObserver {
 
   Future<void> _loadConfig() async {
     if (_firebaseReady) {
+      _bootMark('config load start');
       _update = await AppConfigRepository().load();
+      _bootMark('config loaded');
     }
     if (!mounted) {
       return;
@@ -183,6 +196,7 @@ class _Echo99AppState extends State<Echo99App> with WidgetsBindingObserver {
       return;
     }
     _gate = _Gate.connecting;
+    _bootMark('gate->connecting signedIn=${_account.signedIn}');
     unawaited(_runLink());
   }
 
@@ -203,7 +217,9 @@ class _Echo99AppState extends State<Echo99App> with WidgetsBindingObserver {
     var ok = false;
     try {
       await Future<void>.delayed(const Duration(milliseconds: 2200));
+      _bootMark('fixed delay done, probing');
       ok = await _reachServers().timeout(const Duration(seconds: 30));
+      _bootMark('reachServers ok=$ok latencyMs=$_latencyMs');
     } catch (_) {
       ok = false;
     }
@@ -224,6 +240,7 @@ class _Echo99AppState extends State<Echo99App> with WidgetsBindingObserver {
         _gate = _Gate.menu;
       });
       _markOnline(true);
+      _bootMark('gate->menu');
       unawaited(_warmVoice());
       return;
     }
@@ -278,6 +295,7 @@ class _Echo99AppState extends State<Echo99App> with WidgetsBindingObserver {
       }
     });
     _voiceWarming = false;
+    _bootMark('voice warmup done error=${error == null ? "no" : "yes"}');
     if (!mounted || _offline) {
       return;
     }

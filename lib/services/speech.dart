@@ -45,7 +45,18 @@ class Speech {
             ? IosTextToSpeechAudioMode.voiceChat
             : IosTextToSpeechAudioMode.spokenAudio,
       );
-      await _tts?.speak(text);
+      // A wedged TTS engine must not hold the presentation queue forever:
+      // cap the completion wait, and on timeout stop the shared session so
+      // the next utterance starts clean.
+      final speaking = _tts?.speak(text);
+      if (speaking != null) {
+        await speaking.timeout(
+          const Duration(seconds: 15),
+          onTimeout: () async {
+            await _tts?.stop();
+          },
+        );
+      }
     } catch (_) {}
   }
 
