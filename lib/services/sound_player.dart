@@ -55,14 +55,17 @@ abstract class StepClipDriver {
 /// clip is 216ms < 240ms, so no clip is cut or overlapped. Extracted from
 /// ManagedSoundPlayer so the cadence is unit-testable.
 class PacedStepRunner {
-  // ignore: prefer_initializing_formals (public named param, private field)
-  PacedStepRunner({
+  factory PacedStepRunner({
     required StepClipDriver driver,
     Stopwatch Function()? stopwatchFactory,
     Future<void> Function(Duration)? delay,
-  })  : _driver = driver,
-        _stopwatchFactory = stopwatchFactory ?? Stopwatch.new,
-        _delay = delay ?? Future<void>.delayed;
+  }) =>
+      PacedStepRunner._(
+        driver,
+        stopwatchFactory ?? Stopwatch.new,
+        delay ?? Future<void>.delayed,
+      );
+  PacedStepRunner._(this._driver, this._stopwatchFactory, this._delay);
 
   final StepClipDriver _driver;
   final Stopwatch Function() _stopwatchFactory;
