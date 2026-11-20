@@ -1,12 +1,12 @@
 /// Must match the version name in pubspec.yaml.
 const appVersion = '1.3.5';
-const appBuild = '22';
+const appBuild = '24';
 
 const androidUpdateUrl =
-    'https://github.com/AliHusseinAlMarfadi96/echo99-flutter/releases/download/v1.2.0/Echo99.apk';
+    'https://github.com/AliHusseinAlMarfadi96/echo99-release/releases/download/v1.2.0/app-release.apk';
 
 const iosUpdateUrl =
-    'https://github.com/AliHusseinAlMarfadi96/echo99-flutter/releases/download/v1.2.0/Echo99.ipa';
+    'https://github.com/AliHusseinAlMarfadi96/echo99-release/releases/download/v1.2.0/Echo99.ipa';
 
 /// Blocks only when the server requires a strictly newer version.
 /// This build is never forced out by an equal or older version.
